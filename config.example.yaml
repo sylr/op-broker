@@ -1,0 +1,53 @@
+# opbd configuration. Install as
+#   ~/Library/Application Support/op-broker/config.yaml   (chmod 600)
+#
+# Send SIGHUP to opbd to reload the rules and reopen the log file. Other
+# settings require a restart.
+
+# Tailnet node name of the broker.
+hostname: op-broker
+
+# tsnet state (node keys). Created with mode 0700.
+state_dir: ~/Library/Application Support/op-broker/tsnet
+
+# Address to listen on inside the tailnet.
+listen: ":80"
+
+# Audit log (mode 0600). Empty means stderr.
+log_file: ~/Library/Logs/op-broker.log
+
+# Total time allowed for a request, including time spent queued behind other
+# requests and waiting for Touch ID approval on the Mac.
+request_timeout: 120s
+
+op:
+  path: /opt/homebrew/bin/op
+  # REQUIRED: account UUID from `op account list`.
+  account: ABCDEFGHIJKLMNOPQRSTUVWXYZ
+  # Time allowed for one op invocation, including waiting for you to approve
+  # a Touch ID prompt on the Mac.
+  timeout: 60s
+
+# Access rules. Everything not granted here is denied.
+#
+# Principals (a rule applies to ANY of its principals):
+#   user:<login>      untagged devices owned by this Tailscale user
+#   tag:<name>        tagged devices (a tagged device never matches user:)
+#   node:<stable-id>  one device, by its stable node ID (see the audit log or
+#                     `tailscale status --json`, field "ID")
+#
+# Patterns are case-insensitive. "*" matches one path segment, a final "**"
+# matches the rest.
+#   read:  field reads (opb read / inject / run). A field grant covers every
+#          attribute of the field (e.g. ?attribute=otp, but also the TOTP seed).
+#   items: whole-item reads (opb item get), op://vault/item only. Never
+#          implied by read patterns.
+# Vault and item names may be renamed in 1Password; prefer IDs for sensitive
+# grants.
+rules:
+  - principals: ["user:sylvain@formance.com"]
+    read: ["op://Dev/**"]
+    items: ["op://Dev/postgres"]
+
+  - principals: ["tag:ci"]
+    read: ["op://CI/deploy-key/private key"]
