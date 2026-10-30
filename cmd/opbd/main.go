@@ -1,4 +1,4 @@
-// Command opbd is the 1password-broker server. It joins the tailnet as its
+// Command opbd is the op-broker server. It joins the tailnet as its
 // own node, identifies callers with Tailscale WhoIs, authorizes them against
 // its configuration and resolves secrets with the local 1Password CLI.
 package main
@@ -22,10 +22,10 @@ import (
 	"tailscale.com/client/local"
 	"tailscale.com/tsnet"
 
-	"github.com/sylr/1password-broker/internal/config"
-	"github.com/sylr/1password-broker/internal/opcli"
-	"github.com/sylr/1password-broker/internal/policy"
-	"github.com/sylr/1password-broker/internal/server"
+	"github.com/sylr/op-broker/internal/config"
+	"github.com/sylr/op-broker/internal/opcli"
+	"github.com/sylr/op-broker/internal/policy"
+	"github.com/sylr/op-broker/internal/server"
 )
 
 // Set at build time with -ldflags "-X main.version=... -X main.commit=... -X main.date=...".

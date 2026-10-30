@@ -1,7 +1,11 @@
-# 1password-broker
+# op-broker
 
-Resolve 1Password secret references (`op://vault/item/field`) from any machine
-on your tailnet. The 1Password CLI runs only on your Mac.
+A broker for 1Password: resolve 1Password secret references
+(`op://vault/item/field`) from any machine on your tailnet. The 1Password CLI
+runs only on your Mac.
+
+> op-broker is an independent project. It is not affiliated with, endorsed by
+> or sponsored by 1Password. 1Password is a trademark of AgileBits Inc.
 
 - **`opbd`** runs on the Mac. It joins the tailnet as its own node (embedded
   [tsnet](https://tailscale.com/kb/1244/tsnet)), identifies each caller with
@@ -44,11 +48,11 @@ integration.
 On macOS, with Homebrew (installs `opb` and `opbd`):
 
 ```sh
-brew install --cask sylr/tap/1password-broker
+brew install --cask sylr/tap/op-broker
 ```
 
 On Linux, install the `opb` `.deb` or `.rpm` from the
-[releases](https://github.com/sylr/1password-broker/releases), or use the
+[releases](https://github.com/sylr/op-broker/releases), or use the
 archives (which also exist for Windows and FreeBSD). From source:
 
 ```sh

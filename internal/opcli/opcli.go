@@ -18,8 +18,8 @@ import (
 	"sync/atomic"
 	"time"
 
-	"github.com/sylr/1password-broker/internal/api"
-	"github.com/sylr/1password-broker/internal/ref"
+	"github.com/sylr/op-broker/internal/api"
+	"github.com/sylr/op-broker/internal/ref"
 )
 
 const (

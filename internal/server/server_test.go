@@ -15,10 +15,10 @@ import (
 	"testing"
 	"time"
 
-	"github.com/sylr/1password-broker/internal/api"
-	"github.com/sylr/1password-broker/internal/opcli"
-	"github.com/sylr/1password-broker/internal/policy"
-	"github.com/sylr/1password-broker/internal/ref"
+	"github.com/sylr/op-broker/internal/api"
+	"github.com/sylr/op-broker/internal/opcli"
+	"github.com/sylr/op-broker/internal/policy"
+	"github.com/sylr/op-broker/internal/ref"
 )
 
 const sentinel = "SENTINEL-s3cr3t-9f2c"

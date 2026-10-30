@@ -16,10 +16,10 @@ import (
 	"time"
 	"unicode/utf8"
 
-	"github.com/sylr/1password-broker/internal/api"
-	"github.com/sylr/1password-broker/internal/opcli"
-	"github.com/sylr/1password-broker/internal/policy"
-	"github.com/sylr/1password-broker/internal/ref"
+	"github.com/sylr/op-broker/internal/api"
+	"github.com/sylr/op-broker/internal/opcli"
+	"github.com/sylr/op-broker/internal/policy"
+	"github.com/sylr/op-broker/internal/ref"
 )
 
 // WhoIser identifies the tailnet node behind a remote address.

@@ -16,7 +16,7 @@ import (
 	"syscall"
 	"time"
 
-	"github.com/sylr/1password-broker/internal/api"
+	"github.com/sylr/op-broker/internal/api"
 )
 
 const (

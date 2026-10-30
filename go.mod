@@ -1,4 +1,4 @@
-module github.com/sylr/1password-broker
+module github.com/sylr/op-broker
 
 go 1.27.3
 

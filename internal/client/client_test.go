@@ -10,7 +10,7 @@ import (
 	"slices"
 	"testing"
 
-	"github.com/sylr/1password-broker/internal/api"
+	"github.com/sylr/op-broker/internal/api"
 )
 
 // loopback allows the httptest servers, which listen on loopback.

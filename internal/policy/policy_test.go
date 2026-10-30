@@ -3,7 +3,7 @@ package policy
 import (
 	"testing"
 
-	"github.com/sylr/1password-broker/internal/ref"
+	"github.com/sylr/op-broker/internal/ref"
 )
 
 var (

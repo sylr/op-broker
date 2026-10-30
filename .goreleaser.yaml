@@ -1,7 +1,7 @@
 ---
 version: 2
 
-project_name: 1password-broker
+project_name: op-broker
 
 before:
   hooks:
@@ -115,9 +115,9 @@ nfpms:
   file_name_template: >-
     opb_v{{ .Version }}_{{ .Arch }}
   vendor: "Sylvain Rabot"
-  homepage: "https://github.com/sylr/1password-broker"
+  homepage: "https://github.com/sylr/op-broker"
   maintainer: "Sylvain Rabot <sylvain@abstraction.fr>"
-  description: "Client for 1password-broker: resolve 1Password op:// secret references over Tailscale."
+  description: "Client for op-broker: resolve 1Password op:// secret references over Tailscale."
   formats:
   - deb
   - rpm
@@ -130,7 +130,7 @@ sboms:
 - artifacts: archive
 
 homebrew_casks:
-- name: 1password-broker
+- name: op-broker
   ids:
   - darwin
   binaries:
@@ -138,7 +138,7 @@ homebrew_casks:
   - opbd
   commit_msg_template: "Brew cask update for {{ .ProjectName }} version {{ .Tag }}"
   directory: Casks
-  homepage: "https://github.com/sylr/1password-broker"
+  homepage: "https://github.com/sylr/op-broker"
   description: "Resolve 1Password op:// secret references over Tailscale"
   skip_upload: auto
   repository:
@@ -172,7 +172,7 @@ homebrew_casks:
     opbd must run as a LaunchAgent in your GUI session (1Password desktop-app
     integration needs it). See the README for the configuration file, the
     first interactive tailnet login and the LaunchAgent setup:
-      https://github.com/sylr/1password-broker#install
+      https://github.com/sylr/op-broker#install
 
 changelog:
   sort: asc
@@ -185,6 +185,6 @@ changelog:
 release:
   github:
     owner: sylr
-    name: 1password-broker
+    name: op-broker
   name_template: "v{{.Version}}"
   prerelease: auto

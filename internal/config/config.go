@@ -15,7 +15,7 @@ import (
 
 	"gopkg.in/yaml.v3"
 
-	"github.com/sylr/1password-broker/internal/policy"
+	"github.com/sylr/op-broker/internal/policy"
 )
 
 // Config is the opbd configuration.

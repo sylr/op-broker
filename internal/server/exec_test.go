@@ -11,9 +11,9 @@ import (
 	"testing"
 	"time"
 
-	"github.com/sylr/1password-broker/internal/api"
-	"github.com/sylr/1password-broker/internal/opcli"
-	"github.com/sylr/1password-broker/internal/policy"
+	"github.com/sylr/op-broker/internal/api"
+	"github.com/sylr/op-broker/internal/opcli"
+	"github.com/sylr/op-broker/internal/policy"
 )
 
 // These tests go through the real opcli.Exec with a fake op binary.

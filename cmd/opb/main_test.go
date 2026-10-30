@@ -8,8 +8,8 @@ import (
 	"slices"
 	"testing"
 
-	"github.com/sylr/1password-broker/internal/api"
-	"github.com/sylr/1password-broker/internal/client"
+	"github.com/sylr/op-broker/internal/api"
+	"github.com/sylr/op-broker/internal/client"
 )
 
 func TestFailExitCodes(t *testing.T) {

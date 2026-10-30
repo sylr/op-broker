@@ -1,4 +1,4 @@
-// Command opb is the 1password-broker client. It resolves 1Password secret
+// Command opb is the op-broker client. It resolves 1Password secret
 // references through an opbd server on the tailnet, with a subset of the op
 // CLI interface.
 package main
@@ -13,8 +13,8 @@ import (
 	"os/signal"
 	"strings"
 
-	"github.com/sylr/1password-broker/internal/api"
-	"github.com/sylr/1password-broker/internal/client"
+	"github.com/sylr/op-broker/internal/api"
+	"github.com/sylr/op-broker/internal/client"
 )
 
 const usage = `usage: opb [--server URL] <command> [flags]

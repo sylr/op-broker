@@ -11,7 +11,7 @@ import (
 	"slices"
 	"strings"
 
-	"github.com/sylr/1password-broker/internal/ref"
+	"github.com/sylr/op-broker/internal/ref"
 )
 
 // Identity is a caller as identified by Tailscale WhoIs.
