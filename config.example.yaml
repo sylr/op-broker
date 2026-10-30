@@ -23,7 +23,7 @@ request_timeout: 120s
 op:
   path: /opt/homebrew/bin/op
   # REQUIRED: account UUID from `op account list`.
-  account: ABCDEFGHIJKLMNOPQRSTUVWXYZ
+  account: XXXXXXXXXXXXXXXXXXXXXXXXXX
   # Time allowed for one op invocation, including waiting for you to approve
   # a Touch ID prompt on the Mac.
   timeout: 60s
