@@ -1,0 +1,48 @@
+name: Release
+
+on:
+  push:
+    tags:
+    - "v*"
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      id-token: write
+      attestations: write
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      with:
+        fetch-depth: 0
+
+    - name: Setup Go
+      uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+      with:
+        go-version-file: go.mod
+
+    # goreleaser's sboms config shells out to syft, which goreleaser-action
+    # does not bundle, so install it onto PATH first.
+    - name: Install syft
+      uses: anchore/sbom-action/download-syft@e22c389904149dbc22b58101806040fa8d37a610 # v0.24.0
+
+    - name: Run GoReleaser
+      uses: goreleaser/goreleaser-action@f06c13b6b1a9625abc9e6e439d9c05a8f2190e94 # v7.2.3
+      with:
+        version: "~> v2"
+        args: release --clean
+      env:
+        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        # PAT (or fine-grained token) with contents:write on sylr/homebrew-tap,
+        # since the built-in GITHUB_TOKEN is scoped only to this repo.
+        HOMEBREW_TAP_GITHUB_TOKEN: ${{ secrets.HOMEBREW_TAP_GITHUB_TOKEN }}
+
+    # Mint a GitHub build-provenance attestation for every released file
+    # (archives, DEBs, RPMs, SBOMs) listed in goreleaser's checksum file.
+    # Verify with: gh attestation verify <file> --owner sylr
+    - name: Attest release artifacts
+      uses: actions/attest@59d89421af93a897026c735860bf21b6eb4f7b26 # v4
+      with:
+        subject-checksums: dist/checksums.txt

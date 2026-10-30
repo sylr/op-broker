@@ -1,0 +1,190 @@
+---
+version: 2
+
+project_name: 1password-broker
+
+before:
+  hooks:
+  - go mod tidy
+
+builds:
+# Client for every platform but macOS. `opb run` relies on exec(2) and is
+# not supported on Windows; the other commands are.
+- id: opb
+  main: ./cmd/opb
+  binary: opb
+  env:
+  - CGO_ENABLED=0
+  flags:
+  - -trimpath
+  ldflags:
+  - -s -w
+  - -X main.version=v{{.Version}}
+  - -X main.commit={{.Commit}}
+  - -X main.date={{.Date}}
+  goos:
+  - linux
+  - windows
+  - freebsd
+  goarch:
+  - amd64
+  - arm64
+  ignore:
+  - goos: freebsd
+    goarch: arm64
+
+# Client for macOS, built separately so that macOS archives (and the cask)
+# can bundle it with the server.
+- id: opb-darwin
+  main: ./cmd/opb
+  binary: opb
+  env:
+  - CGO_ENABLED=0
+  flags:
+  - -trimpath
+  ldflags:
+  - -s -w
+  - -X main.version=v{{.Version}}
+  - -X main.commit={{.Commit}}
+  - -X main.date={{.Date}}
+  goos:
+  - darwin
+  goarch:
+  - amd64
+  - arm64
+
+# Server: macOS only. It needs the 1Password desktop app and runs as a
+# LaunchAgent in the user's GUI session.
+- id: opbd
+  main: ./cmd/opbd
+  binary: opbd
+  env:
+  - CGO_ENABLED=0
+  flags:
+  - -trimpath
+  ldflags:
+  - -s -w
+  - -X main.version=v{{.Version}}
+  - -X main.commit={{.Commit}}
+  - -X main.date={{.Date}}
+  goos:
+  - darwin
+  goarch:
+  - amd64
+  - arm64
+
+archives:
+# Client only: Linux, Windows, FreeBSD.
+- id: default
+  ids:
+  - opb
+  formats: [tar.gz]
+  name_template: >-
+    {{ .ProjectName }}_v{{ .Version }}_{{ .Os }}_{{ .Arch }}
+  format_overrides:
+  - goos: windows
+    formats: [zip]
+  files:
+  - README.md
+  - LICENSE*
+
+# macOS: client and server, plus what the server needs to be set up. This is
+# the archive the Homebrew cask installs.
+- id: darwin
+  ids:
+  - opb-darwin
+  - opbd
+  formats: [tar.gz]
+  name_template: >-
+    {{ .ProjectName }}_v{{ .Version }}_{{ .Os }}_{{ .Arch }}
+  files:
+  - README.md
+  - LICENSE*
+  - config.example.yaml
+  - contrib/*
+
+nfpms:
+# Linux packages only carry the client.
+- id: packages
+  ids:
+  - opb
+  package_name: opb
+  # v-prefixed like the archives, but without the OS (deb/rpm are Linux-only).
+  # Only the artifact file name carries the "v"; the internal deb/rpm version
+  # stays bare so dpkg/rpm compare it correctly.
+  file_name_template: >-
+    opb_v{{ .Version }}_{{ .Arch }}
+  vendor: "Sylvain Rabot"
+  homepage: "https://github.com/sylr/1password-broker"
+  maintainer: "Sylvain Rabot <sylvain@abstraction.fr>"
+  description: "Client for 1password-broker: resolve 1Password op:// secret references over Tailscale."
+  formats:
+  - deb
+  - rpm
+  bindir: /usr/bin
+
+checksum:
+  name_template: "checksums.txt"
+
+sboms:
+- artifacts: archive
+
+homebrew_casks:
+- name: 1password-broker
+  ids:
+  - darwin
+  binaries:
+  - opb
+  - opbd
+  commit_msg_template: "Brew cask update for {{ .ProjectName }} version {{ .Tag }}"
+  directory: Casks
+  homepage: "https://github.com/sylr/1password-broker"
+  description: "Resolve 1Password op:// secret references over Tailscale"
+  skip_upload: auto
+  repository:
+    owner: sylr
+    name: homebrew-tap
+    token: "{{ .Env.HOMEBREW_TAP_GITHUB_TOKEN }}"
+  # Homebrew deprecated the `postflight` / `uninstall_preflight` stanzas that
+  # GoReleaser's `hooks:` emits (`*_steps` replace them), and the replacements
+  # take a declarative step DSL instead of arbitrary Ruby, which GoReleaser
+  # cannot emit. Inject the stanza verbatim through custom_block instead.
+  #
+  # Quarantine must be stripped before the binaries are executed, or macOS
+  # SIGKILLs them. `preflight_steps` is first in Homebrew's artifact sort
+  # order, so it wins over every other phase. `{{ `...` }}` protects
+  # Homebrew's own `{{staged_path}}` placeholder from GoReleaser templating.
+  #
+  # `-dr` on each staged binary rather than on staged_path: recursive xattr
+  # follows symlinks out of the tree, and these are the only files executed.
+  # `-r` is kept because plain `-d` exits 1 when the attribute is already
+  # absent.
+  custom_block: |
+    preflight_steps do
+      on_macos do
+        run "/usr/bin/xattr",
+            args: ["-dr", "com.apple.quarantine", "{{ `{{staged_path}}` }}/opb"]
+        run "/usr/bin/xattr",
+            args: ["-dr", "com.apple.quarantine", "{{ `{{staged_path}}` }}/opbd"]
+      end
+    end
+  caveats: |
+    opbd must run as a LaunchAgent in your GUI session (1Password desktop-app
+    integration needs it). See the README for the configuration file, the
+    first interactive tailnet login and the LaunchAgent setup:
+      https://github.com/sylr/1password-broker#install
+
+changelog:
+  sort: asc
+  filters:
+    exclude:
+    - "^docs:"
+    - "^test:"
+    - "^chore:"
+
+release:
+  github:
+    owner: sylr
+    name: 1password-broker
+  name_template: "v{{.Version}}"
+  prerelease: auto

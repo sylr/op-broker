@@ -41,9 +41,23 @@ integration.
 
 ## Install
 
+On macOS, with Homebrew (installs `opb` and `opbd`):
+
 ```sh
-make install          # go install opb and opbd into $(go env GOPATH)/bin
+brew install --cask sylr/tap/1password-broker
 ```
+
+On Linux, install the `opb` `.deb` or `.rpm` from the
+[releases](https://github.com/sylr/1password-broker/releases), or use the
+archives (which also exist for Windows and FreeBSD). From source:
+
+```sh
+make install          # go install opb and opbd into GOBIN (or GOPATH/bin)
+```
+
+With a Homebrew install, point the LaunchAgent at Homebrew's `opbd` (step 3
+below) with `make install-agent INSTALL_DIR=$(brew --prefix)/bin`, run from a
+checkout.
 
 ### Server (Mac)
 
@@ -76,7 +90,7 @@ make install          # go install opb and opbd into $(go env GOPATH)/bin
    daemon:
 
    ```sh
-   make install-agent    # writes ~/Library/LaunchAgents/com.sylr.op-broker.plist and loads it
+   make install install-agent    # from source: writes ~/Library/LaunchAgents/com.sylr.op-broker.plist and loads it
    ```
 
 4. Restrict who can reach the broker in your tailnet policy. The broker is an

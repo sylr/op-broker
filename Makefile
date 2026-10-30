@@ -17,7 +17,10 @@ test:
 install:
 	GOBIN=$(INSTALL_DIR) go install ./cmd/opb ./cmd/opbd
 
-install-agent: install
+# Does not build: run `make install install-agent` from source, or point
+# INSTALL_DIR at an existing opbd (e.g. INSTALL_DIR=$(brew --prefix)/bin).
+install-agent:
+	test -x $(INSTALL_DIR)/opbd
 	sed -e 's|__HOME__|$(HOME)|g' -e 's|__OPBD__|$(INSTALL_DIR)/opbd|g' contrib/com.sylr.op-broker.plist > $(AGENT)
 	-launchctl bootout $(DOMAIN)/com.sylr.op-broker 2>/dev/null
 	launchctl bootstrap $(DOMAIN) $(AGENT)

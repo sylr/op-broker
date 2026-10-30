@@ -24,6 +24,7 @@ Commands:
   inject [-i template] [-o output]
   run [--env-file file]... -- <command> [args...]
   item get <item> --vault <vault> [--format json]
+  version
 
 The server defaults to $OPB_SERVER, then ` + client.DefaultServer + `.
 
@@ -49,6 +50,13 @@ const (
 // maxTemplateBytes bounds the size of an inject template.
 const maxTemplateBytes = 16 << 20
 
+// Set at build time with -ldflags "-X main.version=... -X main.commit=... -X main.date=...".
+var (
+	version = "dev"
+	commit  = "none"
+	date    = "unknown"
+)
+
 func main() {
 	os.Exit(run(os.Args[1:]))
 }
@@ -66,6 +74,14 @@ func run(args []string) int {
 	if len(args) == 0 {
 		global.Usage()
 		return exitError
+	}
+	switch args[0] {
+	case "version", "--version", "-version":
+		fmt.Printf("opb %s (commit %s, built %s)\n", version, commit, date)
+		return exitOK
+	case "help", "-h", "--help":
+		fmt.Fprint(os.Stdout, usage)
+		return exitOK
 	}
 
 	var err error
@@ -100,9 +116,6 @@ func run(args []string) int {
 		err = cmdRun(ctx, c, args)
 	case "item":
 		err = cmdItem(ctx, c, args)
-	case "help", "-h", "--help":
-		fmt.Fprint(os.Stdout, usage)
-		return exitOK
 	default:
 		fmt.Fprintf(os.Stderr, "opb: unknown command %q\n\n%s", cmd, usage)
 		return exitError

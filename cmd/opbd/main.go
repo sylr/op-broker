@@ -28,10 +28,23 @@ import (
 	"github.com/sylr/1password-broker/internal/server"
 )
 
+// Set at build time with -ldflags "-X main.version=... -X main.commit=... -X main.date=...".
+var (
+	version = "dev"
+	commit  = "none"
+	date    = "unknown"
+)
+
 func main() {
 	configPath := flag.String("config", config.DefaultPath(), "configuration file")
 	verbose := flag.Bool("verbose", false, "log tsnet internals")
+	showVersion := flag.Bool("version", false, "print the version and exit")
 	flag.Parse()
+
+	if *showVersion {
+		fmt.Printf("opbd %s (commit %s, built %s)\n", version, commit, date)
+		return
+	}
 
 	if err := run(*configPath, *verbose); err != nil {
 		fmt.Fprintln(os.Stderr, "opbd:", err)
@@ -158,7 +171,7 @@ func run(configPath string, verbose bool) error {
 
 	errc := make(chan error, 1)
 	go func() { errc <- httpSrv.Serve(ln) }()
-	logger.Info("listening", slog.Any("hosts", hosts), slog.String("addr", cfg.Listen), slog.String("account", cfg.Op.Account))
+	logger.Info("listening", slog.String("version", version), slog.Any("hosts", hosts), slog.String("addr", cfg.Listen), slog.String("account", cfg.Op.Account))
 
 	select {
 	case err := <-errc:
