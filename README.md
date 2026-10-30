@@ -178,6 +178,12 @@ Everything not granted is denied. See [`config.example.yaml`](config.example.yam
 - Rules may name vaults and items by name or ID. Renaming in 1Password changes
   what a name-based rule covers, so prefer IDs for sensitive grants. Rules
   match case-insensitively, so avoid names that differ only in case.
+- Rules compare the names in a reference literally, and some vaults have
+  more than one. In a business account, `op` accepts both `Employee` and
+  `Private` for your personal vault, so a rule on `op://Employee/**` does not
+  cover a request for `op://Private/...`. This can only deny, never allow,
+  too much. Use the vault ID instead (`op vault list`), which is unambiguous:
+  `op://<vault-id>/**`.
 - The configuration file must be owned by you, mode `0600`, not a symlink, and
   in a directory that only you can write to. Otherwise `opbd` refuses to start
   or reload.

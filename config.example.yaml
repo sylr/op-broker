@@ -43,7 +43,9 @@ op:
 #   items: whole-item reads (opb item get), op://vault/item only. Never
 #          implied by read patterns.
 # Vault and item names may be renamed in 1Password; prefer IDs for sensitive
-# grants.
+# grants. Names are compared literally: the personal vault of a business
+# account answers to both "Employee" and "Private" in op, so grant it by ID
+# (see `op vault list`) to cover both spellings.
 rules:
   - principals: ["user:sylvain@formance.com"]
     read: ["op://Dev/**"]
