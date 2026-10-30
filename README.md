@@ -255,6 +255,17 @@ launchctl kill HUP gui/$(id -u)/com.sylr.op-broker
   client gives up (150s).
 - `opb run` uses `exec(2)` and supports Unix only.
 
+## Development
+
+The flake provides every tool used to build, test and release (go,
+goreleaser, syft, git, make), and CI uses the same shells. Run `nix develop`
+or let direnv load `.envrc`, then use `make build`, `make test` or
+`goreleaser release --snapshot --clean`.
+
+The shells set `GOTOOLCHAIN=local`, so go never downloads a toolchain. Raising
+the `go` directive in `go.mod` above the flake's go needs a nixpkgs bump
+(`nix flake update`).
+
 ## License
 
 [MIT](LICENSE)

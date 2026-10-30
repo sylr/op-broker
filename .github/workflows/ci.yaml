@@ -8,6 +8,10 @@ on:
 permissions:
   contents: read
 
+# Every tool comes from the flake's per-job dev shells (`nix develop
+# .#ci-<job>`), so CI runs the same go, goreleaser and syft as a local
+# `nix develop`. The shells set GOTOOLCHAIN=local, so go never downloads
+# another toolchain.
 jobs:
   test:
     strategy:
@@ -19,22 +23,57 @@ jobs:
     steps:
     - name: Checkout code
       uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-
-    - name: Setup Go
-      uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
       with:
-        go-version-file: go.mod
+        persist-credentials: false
+
+    - name: Install Nix
+      uses: cachix/install-nix-action@75c75c31ebece974e48ebc36b4ad125bd97bd97b # v31.11.3
+      with:
+        extra_nix_config: |
+          experimental-features = nix-command flakes
+
+    # Keyed per job and OS because each shell has a different closure; gc caps
+    # the store before saving so the cache entry stays bounded.
+    - name: Cache Nix store
+      uses: nix-community/cache-nix-action@7df957e333c1e5da7721f60227dbba6d06080569 # v7.0.2
+      with:
+        primary-key: nix-${{ runner.os }}-${{ github.job }}-${{ hashFiles('flake.nix', 'flake.lock') }}
+        restore-prefixes-first-match: nix-${{ runner.os }}-${{ github.job }}-
+        gc-max-store-size-linux: 1G
+        gc-max-store-size-macos: 1G
+
+    # setup-go is gone, so cache the Go build and module caches ourselves.
+    - name: Go cache paths
+      id: go-cache
+      run: |
+        out=$(nix develop .#ci-test --command go env GOCACHE GOMODCACHE)
+        {
+          echo "gocache=$(printf '%s\n' "$out" | sed -n 1p)"
+          echo "gomodcache=$(printf '%s\n' "$out" | sed -n 2p)"
+        } >> "$GITHUB_OUTPUT"
+
+    - name: Cache Go
+      uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+      with:
+        path: |
+          ${{ steps.go-cache.outputs.gocache }}
+          ${{ steps.go-cache.outputs.gomodcache }}
+        key: ${{ runner.os }}-go-${{ hashFiles('go.mod', 'go.sum') }}
+        restore-keys: |
+          ${{ runner.os }}-go-
 
     - name: Verify modules are tidy
       run: |
-        go mod tidy
-        git diff --exit-code -- go.mod go.sum
+        nix develop .#ci-test --command bash -c '
+          set -e
+          go mod tidy
+          git diff --exit-code -- go.mod go.sum'
 
     - name: Vet
-      run: go vet ./...
+      run: nix develop .#ci-test --command go vet ./...
 
     - name: Test
-      run: go test -race -count=1 ./...
+      run: nix develop .#ci-test --command go test -race -count=1 ./...
 
   goreleaser:
     runs-on: ubuntu-latest
@@ -43,25 +82,25 @@ jobs:
       uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       with:
         fetch-depth: 0
+        persist-credentials: false
 
-    - name: Setup Go
-      uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+    - name: Install Nix
+      uses: cachix/install-nix-action@75c75c31ebece974e48ebc36b4ad125bd97bd97b # v31.11.3
       with:
-        go-version-file: go.mod
+        extra_nix_config: |
+          experimental-features = nix-command flakes
 
-    - name: Install syft
-      uses: anchore/sbom-action/download-syft@e22c389904149dbc22b58101806040fa8d37a610 # v0.24.0
+    - name: Cache Nix store
+      uses: nix-community/cache-nix-action@7df957e333c1e5da7721f60227dbba6d06080569 # v7.0.2
+      with:
+        primary-key: nix-${{ runner.os }}-${{ github.job }}-${{ hashFiles('flake.nix', 'flake.lock') }}
+        restore-prefixes-first-match: nix-${{ runner.os }}-${{ github.job }}-
+        gc-max-store-size-linux: 1G
 
     - name: goreleaser check
-      uses: goreleaser/goreleaser-action@f06c13b6b1a9625abc9e6e439d9c05a8f2190e94 # v7.2.3
-      with:
-        version: "~> v2"
-        args: check
+      run: nix develop .#ci-goreleaser --command goreleaser check
 
     # Build every target, archive, package and the cask without publishing,
     # so release breakage is caught before a tag is pushed.
     - name: goreleaser snapshot
-      uses: goreleaser/goreleaser-action@f06c13b6b1a9625abc9e6e439d9c05a8f2190e94 # v7.2.3
-      with:
-        version: "~> v2"
-        args: release --snapshot --clean --skip=publish
+      run: nix develop .#ci-goreleaser --command goreleaser release --snapshot --clean --skip=publish

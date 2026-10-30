@@ -17,22 +17,22 @@ jobs:
       uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       with:
         fetch-depth: 0
+        persist-credentials: false
 
-    - name: Setup Go
-      uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+    - name: Install Nix
+      uses: cachix/install-nix-action@75c75c31ebece974e48ebc36b4ad125bd97bd97b # v31.11.3
       with:
-        go-version-file: go.mod
+        extra_nix_config: |
+          experimental-features = nix-command flakes
 
-    # goreleaser's sboms config shells out to syft, which goreleaser-action
-    # does not bundle, so install it onto PATH first.
-    - name: Install syft
-      uses: anchore/sbom-action/download-syft@e22c389904149dbc22b58101806040fa8d37a610 # v0.24.0
+    # No Nix store cache here: a cache any workflow run can write must not
+    # feed the binaries we sign and publish. The shell is fetched from
+    # cache.nixos.org instead.
 
+    # Same shell as the CI goreleaser job, so the release is built with the
+    # exact go, goreleaser and syft versions that CI validated.
     - name: Run GoReleaser
-      uses: goreleaser/goreleaser-action@f06c13b6b1a9625abc9e6e439d9c05a8f2190e94 # v7.2.3
-      with:
-        version: "~> v2"
-        args: release --clean
+      run: nix develop .#ci-goreleaser --command goreleaser release --clean
       env:
         GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         # PAT (or fine-grained token) with contents:write on sylr/homebrew-tap,
