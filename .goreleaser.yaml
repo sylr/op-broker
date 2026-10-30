@@ -117,11 +117,18 @@ nfpms:
   vendor: "Sylvain Rabot"
   homepage: "https://github.com/sylr/op-broker"
   maintainer: "Sylvain Rabot <sylvain@abstraction.fr>"
+  license: MIT
   description: "Client for op-broker: resolve 1Password op:// secret references over Tailscale."
   formats:
   - deb
   - rpm
   bindir: /usr/bin
+  contents:
+  # MIT requires the notice to ship with every copy.
+  - src: ./LICENSE
+    dst: /usr/share/doc/opb/LICENSE
+    file_info:
+      mode: 0644
 
 checksum:
   name_template: "checksums.txt"

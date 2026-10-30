@@ -248,3 +248,7 @@ launchctl kill HUP gui/$(id -u)/com.sylr.op-broker
 - `request_timeout` is capped at 140s, so the server always answers before the
   client gives up (150s).
 - `opb run` uses `exec(2)` and supports Unix only.
+
+## License
+
+[MIT](LICENSE)
