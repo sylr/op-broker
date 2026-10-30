@@ -36,6 +36,25 @@ func TestTemplate(t *testing.T) {
 	}
 }
 
+func TestTemplateVarBeforeClosingBraces(t *testing.T) {
+	lookup := env(map[string]string{"FIELD": "password", "V": "Dev"})
+	for _, src := range []string{
+		"{{op://Dev/db/${FIELD}}}",
+		"{{ op://Dev/db/${FIELD} }}",
+		"{{op://${V}/db/${FIELD}}}",
+		"{{op://Dev/db/$FIELD}}",
+	} {
+		tpl, err := ParseTemplate(src, lookup)
+		if err != nil {
+			t.Errorf("ParseTemplate(%q): %v", src, err)
+			continue
+		}
+		if refs := tpl.Refs(); !slices.Equal(refs, []string{"op://Dev/db/password"}) {
+			t.Errorf("ParseTemplate(%q).Refs() = %v", src, refs)
+		}
+	}
+}
+
 func TestTemplateNoRefs(t *testing.T) {
 	tpl, err := ParseTemplate("plain text } { }}\n", env(nil))
 	if err != nil {

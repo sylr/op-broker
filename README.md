@@ -56,15 +56,21 @@ make install          # go install opb and opbd into $(go env GOPATH)/bin
    op account list    # put the account UUID in op.account
    ```
 
-2. Join the tailnet once, interactively. Create a **tagged** auth key
-   (`tag:op-broker`) in the Tailscale admin console, then run:
+2. Join the tailnet once, interactively, **as yourself**. The broker must be
+   an untagged node owned by your user, because that is how clients
+   recognize it:
 
    ```sh
-   TS_AUTHKEY=tskey-auth-... opbd
+   opbd    # prints a login.tailscale.com URL: open it and sign in
    ```
 
-   The node state is saved in `state_dir`, so later starts need no key. Stop
-   it with Ctrl-C.
+   An untagged auth key (`TS_AUTHKEY=tskey-auth-... opbd`) works too. Don't
+   use a tagged key. The node state is saved in `state_dir`, so later starts
+   need no login. Stop it with Ctrl-C.
+
+   In the admin console, **disable key expiry** for the `op-broker` node.
+   Otherwise the node expires after the tailnet's key lifetime (180 days by
+   default), and `opbd` needs a new interactive login.
 
 3. Run it as a LaunchAgent. It must be an agent in your GUI session, not a
    daemon:
@@ -73,14 +79,16 @@ make install          # go install opb and opbd into $(go env GOPATH)/bin
    make install-agent    # writes ~/Library/LaunchAgents/com.sylr.op-broker.plist and loads it
    ```
 
-4. Restrict who can reach the broker in your tailnet policy. Grants are
-   additive: if a broader rule (for example the default allow-all) already
-   lets everyone reach `tag:op-broker`, remove or narrow it.
+4. Restrict who can reach the broker in your tailnet policy. The broker is an
+   ordinary device of yours, so name it with a host alias set to its
+   Tailscale IP (`tailscale ip op-broker`). Grants are additive: if a broader
+   rule (for example the default allow-all) already lets everyone reach your
+   devices, narrow it.
 
    ```jsonc
-   "tagOwners": { "tag:op-broker": ["autogroup:admin"] },
+   "hosts": { "op-broker": "100.x.y.z" },
    "grants": [
-     { "src": ["sylvain@formance.com", "tag:ci"], "dst": ["tag:op-broker"], "ip": ["tcp:80"] }
+     { "src": ["sylvain@formance.com", "tag:ci"], "dst": ["op-broker"], "ip": ["tcp:80"] }
    ]
    ```
 
@@ -90,10 +98,31 @@ make install          # go install opb and opbd into $(go env GOPATH)/bin
 export OPB_SERVER=http://op-broker.<tailnet>.ts.net   # default: http://op-broker
 ```
 
-Use the full MagicDNS name. The client only connects to Tailscale addresses
-(`100.64.0.0/10`, `fd7a:115c:a1e0::/48`), so a LAN host answering to
-`op-broker` cannot impersonate the broker. `--allow-non-tailnet` (or
-`OPB_ALLOW_NON_TAILNET=1`) lifts this restriction for testing.
+Use the full MagicDNS name. Before sending anything, the client
+authenticates the broker:
+
+- It only connects to Tailscale addresses (`100.64.0.0/10`,
+  `fd7a:115c:a1e0::/48`).
+- It asks the **local Tailscale daemon** who owns the address it connected
+  to, and checks it against the expected broker identity. If the local daemon
+  cannot be reached, the client refuses to connect.
+
+The expected identity comes from `OPB_BROKER` (or `--broker`):
+
+| Value | The broker must be |
+|---|---|
+| *(unset)* | an untagged node owned by the same user as this machine |
+| `user:<login>` | an untagged node owned by `<login>` |
+| `node:<stable-id>` | that exact node |
+| `tag:<name>` | a node carrying that ACL tag |
+
+Your own machines need no setting. **Tagged machines (CI, servers) must set
+it**, e.g. `OPB_BROKER=user:sylvain@formance.com`. A tagged machine has no
+owner to derive the identity from, so `opb` refuses to run there without it.
+
+Address ranges alone would not be enough, because other networks also use
+the CGNAT range. `--allow-non-tailnet` (or `OPB_ALLOW_NON_TAILNET=1`) turns
+both checks off. It is insecure and meant for testing only.
 
 ## Usage
 
@@ -141,17 +170,24 @@ Reload rules without restarting:
 launchctl kill HUP gui/$(id -u)/com.sylr.op-broker
 ```
 
+A reload applies to new requests. Requests already being handled finish
+under the rules they started with. If the new file is invalid, for example
+because it has a second YAML document, `opbd` logs an error and keeps the
+previous rules.
+
 ## Trust boundary
 
 - Tailscale WhoIs identifies a **device**, not a user or a process on it. Any
   process on an allowed device can read what that device is allowed to read.
 - Traffic relayed by a subnet router, `tailscale serve` or a reverse proxy is
-  identified as the relaying node. Every client behind that node gets its
-  grants, so don't grant secrets to such nodes, or grant them by `node:`
-  only.
-- Inside the tailnet, any member could register a node with the broker's name
-  while it is offline. Restrict who can create `tag:op-broker` nodes and set
-  `OPB_SERVER` to the exact name the broker logs at startup.
+  identified as the relaying node, whichever principal you use for it. Every
+  caller that can reach the relay gets the relay's grants, so **don't grant
+  secrets to nodes that relay traffic for others.**
+- Clients only talk to an untagged node owned by the expected user (or the
+  pinned node or tag). Only that user can register such nodes. Any of the
+  user's other untagged devices could therefore answer as the broker, so use
+  `OPB_BROKER=node:<stable-id>` to pin the exact node if those devices are
+  less trusted than the Mac.
 - Traffic is plain HTTP inside WireGuard. The client never uses HTTP proxies
   and never follows redirects. The server rejects requests that carry an
   `Origin` header, are not `application/json`, or have a `Host` other than its
@@ -182,12 +218,15 @@ launchctl kill HUP gui/$(id -u)/com.sylr.op-broker
   reference. Bare references, escapes and defaults are rejected rather than
   passed through.
 - `run` only resolves variables whose whole value is a reference, as `op run`
-  does. The env-file format is a subset of dotenv (see `ParseDotenv`) with no
-  interpolation.
+  does. Precedence also matches `op run`: env files override the shell
+  environment, and later files override earlier ones. The command is looked up
+  in the resulting `PATH`, and relative entries are skipped. The env-file
+  format is a subset of dotenv (see `ParseDotenv`) with no interpolation.
 - Values must be UTF-8 text. Binary file attachments are rejected.
 - All `op` calls are serialized, and a batch is all-or-nothing: if one
   reference is denied, missing or fails, nothing is returned. One command can
-  use at most 100 distinct references.
+  use at most 100 distinct references with at most 8 MiB of values in total.
+  The server handles at most 64 API requests at once.
 - `request_timeout` is capped at 140s, so the server always answers before the
   client gives up (150s).
 - `opb run` uses `exec(2)` and supports Unix only.

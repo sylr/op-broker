@@ -48,6 +48,8 @@ func TestParseErrors(t *testing.T) {
 		"bad rule":                  strings.Replace(valid, "op://Dev/**", "Dev/**", 1),
 		"request timeout too short": strings.Replace(valid, "request_timeout: 90s", "request_timeout: 1s", 1),
 		"request timeout too long":  strings.Replace(valid, "request_timeout: 90s", "request_timeout: 300s", 1),
+		"second document":           valid + "\n---\nrules: []\n",
+		"malformed second document": valid + "\n---\n: [\n",
 	}
 	for name, doc := range tests {
 		t.Run(name, func(t *testing.T) {
@@ -84,6 +86,14 @@ func TestLoadPermissions(t *testing.T) {
 	}
 	if _, _, err := Load(link); err == nil {
 		t.Error("Load accepted a symlinked config")
+	}
+
+	other := t.TempDir()
+	if err := os.Symlink(path, filepath.Join(other, "config.yaml")); err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := Load(filepath.Join(other, "config.yaml")); err == nil {
+		t.Error("Load followed a symlink to a file outside the directory")
 	}
 
 	if err := os.Chmod(dir, 0o777); err != nil {

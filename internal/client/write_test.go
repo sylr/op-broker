@@ -1,6 +1,8 @@
 package client
 
 import (
+	"errors"
+	"io/fs"
 	"os"
 	"path/filepath"
 	"testing"
@@ -70,11 +72,34 @@ func TestWriteFileAtomicRefusesDirectory(t *testing.T) {
 
 func TestWriteFileAtomicNoTempLeftOnError(t *testing.T) {
 	dir := t.TempDir()
-	if err := WriteFileAtomic(filepath.Join(dir, "missing", "out"), []byte("x")); err == nil {
+	path := filepath.Join(dir, "out")
+	if err := os.WriteFile(path, []byte("previous"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	var tmpName string
+	rename = func(oldpath, newpath string) error {
+		tmpName = oldpath
+		if b, err := os.ReadFile(oldpath); err != nil || string(b) != "secret" {
+			t.Errorf("temporary file does not hold the data before rename: %q, %v", b, err)
+		}
+		return errors.New("injected rename failure")
+	}
+	t.Cleanup(func() { rename = os.Rename })
+
+	if err := WriteFileAtomic(path, []byte("secret")); err == nil {
 		t.Fatal("expected error")
 	}
+	if tmpName == "" {
+		t.Fatal("rename was never reached")
+	}
+	if _, err := os.Lstat(tmpName); !errors.Is(err, fs.ErrNotExist) {
+		t.Fatalf("temporary file holding secrets left behind: %v", err)
+	}
+	if b, _ := os.ReadFile(path); string(b) != "previous" {
+		t.Fatalf("destination modified: %q", b)
+	}
 	entries, _ := os.ReadDir(dir)
-	if len(entries) != 0 {
+	if len(entries) != 1 {
 		t.Fatalf("leftover files: %v", entries)
 	}
 }

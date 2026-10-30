@@ -10,6 +10,14 @@ const MaxRefs = 100
 // MaxBodyBytes is the maximum size of a request body.
 const MaxBodyBytes = 1 << 20
 
+// MaxValueBytes is the maximum total size of the values returned by one
+// resolve request.
+const MaxValueBytes = 8 << 20
+
+// MaxResponseBytes is the maximum size of an encoded response body. Clients
+// refuse larger responses; servers never send them.
+const MaxResponseBytes = 16 << 20
+
 // ResolveRequest is the body of POST /v1/resolve.
 type ResolveRequest struct {
 	Refs []string `json:"refs"`
@@ -47,6 +55,7 @@ const (
 	CodeDenied           Code = "denied"
 	CodeNotFound         Code = "not_found"
 	CodeUnsupportedValue Code = "unsupported_value"
+	CodeTooLarge         Code = "too_large"
 	CodeOpLocked         Code = "op_locked"
 	CodeBusy             Code = "busy"
 	CodeOpFailed         Code = "op_failed"
@@ -63,7 +72,7 @@ func (c Code) Status() int {
 		return http.StatusForbidden
 	case CodeNotFound:
 		return http.StatusNotFound
-	case CodeUnsupportedValue:
+	case CodeUnsupportedValue, CodeTooLarge:
 		return http.StatusUnprocessableEntity
 	case CodeOpLocked, CodeBusy:
 		return http.StatusServiceUnavailable
@@ -88,6 +97,8 @@ func (c Code) Message() string {
 		return "secret reference not found"
 	case CodeUnsupportedValue:
 		return "value is not valid UTF-8 text"
+	case CodeTooLarge:
+		return "response would be too large, request fewer or smaller secrets"
 	case CodeOpLocked:
 		return "1Password is locked or approval is pending on the server"
 	case CodeBusy:

@@ -39,11 +39,10 @@ func ParseTemplate(src string, lookupEnv func(string) (string, bool)) (*Template
 		}
 		t.segments = append(t.segments, segment{text: src[pos:open]})
 
-		end := strings.Index(src[open+2:], "}}")
+		end := findClose(src, open+2)
 		if end < 0 {
 			return nil, fmt.Errorf("line %d: unclosed {{", lineOf(src, open))
 		}
-		end += open + 2
 		inner := strings.TrimSpace(src[open+2 : end])
 		if !strings.HasPrefix(inner, "op://") || strings.Contains(inner, "{{") {
 			return nil, fmt.Errorf("line %d: unsupported template expression {{%s}} (only {{ op://... }} is supported)", lineOf(src, open), src[open+2:end])
@@ -55,6 +54,24 @@ func ParseTemplate(src string, lookupEnv func(string) (string, bool)) (*Template
 		t.segments = append(t.segments, segment{text: expanded, isRef: true})
 		pos = end + 2
 	}
+}
+
+// findClose returns the index of the "}}" closing a template expression that
+// starts at from, ignoring braces of ${VAR} expressions, or -1.
+func findClose(src string, from int) int {
+	for i := from; i+1 < len(src); i++ {
+		switch {
+		case src[i] == '$' && src[i+1] == '{':
+			j := strings.IndexByte(src[i+2:], '}')
+			if j < 0 {
+				return -1
+			}
+			i += 2 + j
+		case src[i] == '}' && src[i+1] == '}':
+			return i
+		}
+	}
+	return -1
 }
 
 // Refs returns the distinct references used by the template.

@@ -13,8 +13,8 @@ import (
 	"github.com/sylr/1password-broker/internal/api"
 )
 
-// local allows the httptest servers, which listen on loopback.
-var local = Options{AllowNonTailnet: true}
+// loopback allows the httptest servers, which listen on loopback.
+var loopback = Options{AllowNonTailnet: true}
 
 func TestRefusesNonTailnetAddress(t *testing.T) {
 	var hits int
@@ -29,6 +29,37 @@ func TestRefusesNonTailnetAddress(t *testing.T) {
 	}
 	if hits != 0 {
 		t.Fatal("request reached a non-tailnet server")
+	}
+}
+
+func TestVerifierGatesEveryConnection(t *testing.T) {
+	var hits int
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		hits++
+		json.NewEncoder(w).Encode(api.ResolveResponse{Values: map[string]string{"op://a/b/c": "v"}})
+	}))
+	defer srv.Close()
+
+	var verified []string
+	reject := Options{AllowNonTailnet: true, Verify: func(_ context.Context, addr string) error {
+		verified = append(verified, addr)
+		return errors.New("not the broker")
+	}}
+	c, _ := New(srv.URL, reject)
+	if _, err := c.Resolve(context.Background(), []string{"op://a/b/c"}); err == nil {
+		t.Fatal("request sent to an unverified peer")
+	}
+	if hits != 0 {
+		t.Fatal("unverified peer received the request")
+	}
+	if len(verified) != 1 || verified[0] != srv.Listener.Addr().String() {
+		t.Fatalf("verifier called with %v, want the connected address %s", verified, srv.Listener.Addr())
+	}
+
+	accept := Options{AllowNonTailnet: true, Verify: func(context.Context, string) error { return nil }}
+	c, _ = New(srv.URL, accept)
+	if _, err := c.Resolve(context.Background(), []string{"op://a/b/c"}); err != nil {
+		t.Fatal(err)
 	}
 }
 
@@ -77,7 +108,7 @@ func TestResolve(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	c, err := New(srv.URL, local)
+	c, err := New(srv.URL, loopback)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -95,7 +126,7 @@ func TestResolveMissingValue(t *testing.T) {
 		json.NewEncoder(w).Encode(api.ResolveResponse{Values: map[string]string{}})
 	}))
 	defer srv.Close()
-	c, _ := New(srv.URL, local)
+	c, _ := New(srv.URL, loopback)
 	if _, err := c.Resolve(context.Background(), []string{"op://a/b/c"}); err == nil {
 		t.Fatal("incomplete response accepted")
 	}
@@ -107,7 +138,7 @@ func TestServerError(t *testing.T) {
 		json.NewEncoder(w).Encode(api.ErrorBody{Error: api.ErrorDetail{Code: api.CodeDenied, Message: "x", Refs: []string{"op://a/b/c"}}})
 	}))
 	defer srv.Close()
-	c, _ := New(srv.URL, local)
+	c, _ := New(srv.URL, loopback)
 	_, err := c.Resolve(context.Background(), []string{"op://a/b/c"})
 	var ce *Error
 	if !errors.As(err, &ce) || ce.Code != api.CodeDenied || !slices.Equal(ce.Refs, []string{"op://a/b/c"}) {
@@ -123,7 +154,7 @@ func TestRefusesRedirect(t *testing.T) {
 		http.Redirect(w, r, target.URL+"/v1/resolve", http.StatusTemporaryRedirect)
 	}))
 	defer srv.Close()
-	c, _ := New(srv.URL, local)
+	c, _ := New(srv.URL, loopback)
 	if _, err := c.Resolve(context.Background(), []string{"op://a/b/c"}); err == nil {
 		t.Fatal("redirect followed")
 	}

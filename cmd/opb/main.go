@@ -27,8 +27,13 @@ Commands:
 
 The server defaults to $OPB_SERVER, then ` + client.DefaultServer + `.
 
-The client only connects to Tailscale addresses unless --allow-non-tailnet
-(or OPB_ALLOW_NON_TAILNET=1) is set.
+Before sending anything, the client asks the local Tailscale daemon who owns
+the server address and requires it to be --broker ($OPB_BROKER): user:<login>
+(an untagged node of that user), tag:<name> or node:<stable-id>. By default the
+server must be an untagged node owned by the same user as this machine; tagged
+machines must set OPB_BROKER. --allow-non-tailnet (OPB_ALLOW_NON_TAILNET=1)
+disables this check and the tailnet address restriction; use it only for
+testing.
 
 Exit status: 0 success, 1 error, 2 access denied, 3 1Password locked,
 approval pending or not given in time on the server.
@@ -52,7 +57,8 @@ func run(args []string) int {
 	global := flag.NewFlagSet("opb", flag.ContinueOnError)
 	global.Usage = func() { fmt.Fprint(os.Stderr, usage) }
 	server := global.String("server", "", "opbd server URL")
-	allowNonTailnet := global.Bool("allow-non-tailnet", os.Getenv("OPB_ALLOW_NON_TAILNET") == "1", "allow connecting to a server outside the Tailscale address ranges")
+	broker := global.String("broker", os.Getenv("OPB_BROKER"), "expected tailnet identity of the server: user:<login>, tag:<name> or node:<stable-id> (default: untagged node of this machine's owner)")
+	allowNonTailnet := global.Bool("allow-non-tailnet", os.Getenv("OPB_ALLOW_NON_TAILNET") == "1", "INSECURE, for testing: connect to any address and skip broker verification")
 	if err := global.Parse(args); err != nil {
 		return usageExit(err)
 	}
@@ -62,6 +68,7 @@ func run(args []string) int {
 		return exitError
 	}
 
+	var err error
 	addr := *server
 	if addr == "" {
 		addr = os.Getenv("OPB_SERVER")
@@ -69,7 +76,13 @@ func run(args []string) int {
 	if addr == "" {
 		addr = client.DefaultServer
 	}
-	c, err := client.New(addr, client.Options{AllowNonTailnet: *allowNonTailnet})
+	opts := client.Options{AllowNonTailnet: *allowNonTailnet}
+	if !*allowNonTailnet {
+		if opts.Verify, err = client.TailscaleVerifier(*broker); err != nil {
+			return fail(err)
+		}
+	}
+	c, err := client.New(addr, opts)
 	if err != nil {
 		return fail(err)
 	}
@@ -175,8 +188,8 @@ func cmdInject(ctx context.Context, c *client.Client, args []string) error {
 func cmdRun(ctx context.Context, c *client.Client, args []string) error {
 	fs := newFlagSet("run", "run [--env-file file]... -- <command> [args...]\n\n"+
 		"Environment variables whose whole value is an op:// reference are resolved\n"+
-		"before <command> is executed. The process environment overrides env files,\n"+
-		"and later env files override earlier ones.\n\n"+
+		"before <command> is executed. As with op run, env files override the process\n"+
+		"environment, and later env files override earlier ones.\n\n"+
 		"WARNING: unlike op run, the output of <command> is NOT masked: secrets it\n"+
 		"prints will appear in clear.")
 	var envFiles stringsFlag

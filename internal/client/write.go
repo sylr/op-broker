@@ -8,6 +8,10 @@ import (
 	"path/filepath"
 )
 
+// rename is replaced in tests to exercise failures after secrets have been
+// written to the temporary file.
+var rename = os.Rename
+
 // WriteFileAtomic writes data to path with mode 0600, replacing any existing
 // file atomically. It refuses to write through a symlink or over anything
 // that is not a regular file. Existing permissions are not preserved: the
@@ -46,5 +50,5 @@ func WriteFileAtomic(path string, data []byte) (err error) {
 	if err = tmp.Close(); err != nil {
 		return err
 	}
-	return os.Rename(tmp.Name(), path)
+	return rename(tmp.Name(), path)
 }

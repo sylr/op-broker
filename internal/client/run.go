@@ -4,7 +4,8 @@ import (
 	"bufio"
 	"fmt"
 	"io"
-	"os/exec"
+	"os"
+	"path/filepath"
 	"slices"
 	"strings"
 	"syscall"
@@ -139,8 +140,9 @@ func checkTrailer(s string) error {
 	return nil
 }
 
-// MergeEnv merges env files and the process environment. Later files
-// override earlier ones, and the process environment overrides all files.
+// MergeEnv merges the process environment and env files with the precedence
+// of `op run`: env files override the process environment, and later files
+// override earlier ones.
 func MergeEnv(environ []string, files ...[]EnvVar) []string {
 	values := make(map[string]string)
 	var order []string
@@ -150,14 +152,14 @@ func MergeEnv(environ []string, files ...[]EnvVar) []string {
 		}
 		values[k] = v
 	}
-	for _, vars := range files {
-		for _, v := range vars {
-			set(v.Key, v.Value)
-		}
-	}
 	for _, kv := range environ {
 		if k, v, ok := strings.Cut(kv, "="); ok {
 			set(k, v)
+		}
+	}
+	for _, vars := range files {
+		for _, v := range vars {
+			set(v.Key, v.Value)
 		}
 	}
 	env := make([]string, 0, len(order))
@@ -197,11 +199,49 @@ func SubstituteEnv(env []string, values map[string]string) ([]string, error) {
 	return out, nil
 }
 
-// Exec replaces the current process with argv, run with env.
+// Exec replaces the current process with argv, run with env. A bare command
+// name is looked up in the PATH of env, the environment the command will
+// actually run with.
 func Exec(argv []string, env []string) error {
-	path, err := exec.LookPath(argv[0])
+	path, err := LookPath(argv[0], env)
 	if err != nil {
 		return err
 	}
 	return syscall.Exec(path, argv, env)
+}
+
+// LookPath resolves file like a shell would with the PATH found in env.
+// Relative PATH entries are skipped, so a command is never picked up from
+// the current directory by accident.
+func LookPath(file string, env []string) (string, error) {
+	if strings.Contains(file, "/") {
+		return file, checkExecutable(file)
+	}
+	var pathEnv string
+	for _, kv := range env {
+		if v, ok := strings.CutPrefix(kv, "PATH="); ok {
+			pathEnv = v
+		}
+	}
+	for _, dir := range filepath.SplitList(pathEnv) {
+		if !filepath.IsAbs(dir) {
+			continue
+		}
+		p := filepath.Join(dir, file)
+		if checkExecutable(p) == nil {
+			return p, nil
+		}
+	}
+	return "", fmt.Errorf("%s: executable file not found in PATH", file)
+}
+
+func checkExecutable(path string) error {
+	fi, err := os.Stat(path)
+	if err != nil {
+		return err
+	}
+	if !fi.Mode().IsRegular() || fi.Mode().Perm()&0o111 == 0 {
+		return fmt.Errorf("%s is not an executable file", path)
+	}
+	return nil
 }

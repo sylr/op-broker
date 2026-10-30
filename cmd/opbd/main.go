@@ -104,6 +104,10 @@ func run(configPath string, verbose bool) error {
 	if status.Self != nil {
 		dnsName := strings.TrimSuffix(status.Self.DNSName, ".")
 		hosts = append(hosts, dnsName)
+		if status.Self.Tags != nil && status.Self.Tags.Len() > 0 {
+			logger.Warn("this node is tagged; clients expect the broker to be an untagged node of its owner unless they set OPB_BROKER",
+				slog.Any("tags", status.Self.Tags.AsSlice()))
+		}
 		if !strings.HasPrefix(dnsName, cfg.Hostname+".") {
 			logger.Warn("tailnet name differs from the configured hostname (name collision?); clients must use the actual name",
 				slog.String("hostname", cfg.Hostname), slog.String("dns_name", dnsName))

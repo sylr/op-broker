@@ -25,8 +25,6 @@ const (
 	// Timeout bounds a whole request. It is longer than the server's request
 	// deadline so that server-side errors are reported rather than cut off.
 	Timeout = 150 * time.Second
-	// maxResponseBytes bounds the response body read from the server.
-	maxResponseBytes = 16 << 20
 )
 
 // Error is an error reported by the server.
@@ -57,6 +55,10 @@ type Options struct {
 	// resolved through LAN DNS, mDNS or a search domain cannot impersonate
 	// the broker when MagicDNS is unavailable.
 	AllowNonTailnet bool
+	// Verify, if set, authenticates every new connection. Address ranges
+	// alone do not authenticate the broker: other networks use the same
+	// CGNAT range.
+	Verify Verifier
 }
 
 // Client is an opbd client.
@@ -100,8 +102,18 @@ func newHTTPClient(opts Options) *http.Client {
 	return &http.Client{
 		Timeout: Timeout,
 		Transport: &http.Transport{
-			Proxy:               nil,
-			DialContext:         dialer.DialContext,
+			Proxy: nil,
+			DialContext: func(ctx context.Context, network, addr string) (net.Conn, error) {
+				conn, err := dialer.DialContext(ctx, network, addr)
+				if err != nil || opts.Verify == nil {
+					return conn, err
+				}
+				if err := opts.Verify(ctx, conn.RemoteAddr().String()); err != nil {
+					conn.Close()
+					return nil, err
+				}
+				return conn, nil
+			},
 			TLSHandshakeTimeout: 10 * time.Second,
 			MaxIdleConns:        1,
 			IdleConnTimeout:     30 * time.Second,
@@ -162,11 +174,11 @@ func (c *Client) post(ctx context.Context, path string, reqBody any) ([]byte, er
 		return nil, err
 	}
 	defer resp.Body.Close()
-	body, err := io.ReadAll(io.LimitReader(resp.Body, maxResponseBytes+1))
+	body, err := io.ReadAll(io.LimitReader(resp.Body, api.MaxResponseBytes+1))
 	if err != nil {
 		return nil, err
 	}
-	if len(body) > maxResponseBytes {
+	if len(body) > api.MaxResponseBytes {
 		return nil, errors.New("server response too large")
 	}
 	if resp.StatusCode != http.StatusOK {

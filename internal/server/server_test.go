@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"log/slog"
 	"net/http"
 	"net/http/httptest"
@@ -431,4 +432,65 @@ func mustPolicy(t *testing.T, rules ...policy.Rule) *policy.Policy {
 		t.Fatal(err)
 	}
 	return p
+}
+
+type sizedRunner struct{ size int }
+
+func (r sizedRunner) Read(context.Context, ref.Ref) ([]byte, error) {
+	// Control characters expand 6x when JSON-encoded.
+	return bytes.Repeat([]byte{0x01}, r.size), nil
+}
+
+func (sizedRunner) ItemGet(context.Context, string, string) ([]byte, error) {
+	return nil, &opcli.Error{Code: api.CodeNotFound}
+}
+
+func TestResolveResponseBudget(t *testing.T) {
+	refs := func(n int) string {
+		var rs []string
+		for i := range n {
+			rs = append(rs, fmt.Sprintf("op://Dev/item%d/password", i))
+		}
+		return resolveBody(rs...)
+	}
+	tests := []struct {
+		name   string
+		size   int
+		n      int
+		status int
+	}{
+		{"small batch", 1 << 10, 10, http.StatusOK},
+		{"values over aggregate budget", 1 << 20, 9, http.StatusUnprocessableEntity},
+		{"encoded body over client limit", 1 << 20, 3, http.StatusUnprocessableEntity},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			h := newHarness(t)
+			h.srv.runner = sizedRunner{size: tt.size}
+			rec := h.do(t, "POST", "/v1/resolve", refs(tt.n))
+			if rec.Code != tt.status {
+				t.Fatalf("status = %d, want %d", rec.Code, tt.status)
+			}
+			if rec.Body.Len() > api.MaxResponseBytes {
+				t.Fatalf("response of %d bytes exceeds the client limit", rec.Body.Len())
+			}
+			if tt.status != http.StatusOK && decodeError(t, rec).Code != api.CodeTooLarge {
+				t.Fatalf("body = %s", rec.Body)
+			}
+		})
+	}
+}
+
+func TestInflightLimit(t *testing.T) {
+	h := newHarness(t)
+	for range MaxInflight {
+		h.srv.inflight <- struct{}{}
+	}
+	rec := h.do(t, "POST", "/v1/resolve", resolveBody("op://Dev/postgres/user"))
+	if rec.Code != http.StatusServiceUnavailable || decodeError(t, rec).Code != api.CodeBusy {
+		t.Fatalf("status = %d, body = %s", rec.Code, rec.Body)
+	}
+	if rec := h.do(t, "GET", "/healthz", ""); rec.Code != http.StatusOK {
+		t.Fatalf("healthz blocked by API limit: %d", rec.Code)
+	}
 }

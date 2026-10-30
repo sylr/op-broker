@@ -2,6 +2,7 @@
 package server
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
@@ -49,6 +50,7 @@ type Server struct {
 	requestTimeout time.Duration
 	policy         atomic.Pointer[policy.Policy]
 	mux            *http.ServeMux
+	inflight       chan struct{}
 }
 
 // New returns a server.
@@ -60,6 +62,7 @@ func New(cfg Config) *Server {
 		hosts:          make(map[string]bool),
 		requestTimeout: cfg.RequestTimeout,
 		mux:            http.NewServeMux(),
+		inflight:       make(chan struct{}, MaxInflight),
 	}
 	for _, h := range cfg.Hosts {
 		s.hosts[normalizeHost(h)] = true
@@ -93,11 +96,23 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		writeError(w, api.CodeBadRequest, nil)
 		return
 	}
+	if strings.HasPrefix(r.URL.Path, "/v1/") {
+		select {
+		case s.inflight <- struct{}{}:
+			defer func() { <-s.inflight }()
+		default:
+			writeError(w, api.CodeBusy, nil)
+			return
+		}
+	}
 	s.mux.ServeHTTP(w, r)
 }
 
 // whoisTimeout bounds the identification of a caller.
 const whoisTimeout = 5 * time.Second
+
+// MaxInflight bounds the number of API requests handled concurrently.
+const MaxInflight = 64
 
 // event accumulates the fields of one audit log entry.
 type event struct {
@@ -218,6 +233,7 @@ func (s *Server) handleResolve(w http.ResponseWriter, r *http.Request) {
 	}
 
 	values := make(map[string]string, len(byCanonical))
+	total := 0
 	for _, c := range e.refs {
 		out, err := s.runner.Read(ctx, byCanonical[c])
 		if err != nil {
@@ -231,6 +247,11 @@ func (s *Server) handleResolve(w http.ResponseWriter, r *http.Request) {
 			writeError(w, api.CodeUnsupportedValue, nil)
 			return
 		}
+		if total += len(out); total > api.MaxValueBytes {
+			s.audit(e, "error", api.CodeTooLarge)
+			writeError(w, api.CodeTooLarge, nil)
+			return
+		}
 		values[c] = string(out)
 	}
 
@@ -238,8 +259,20 @@ func (s *Server) handleResolve(w http.ResponseWriter, r *http.Request) {
 	for raw, c := range canonicalOf {
 		resp.Values[raw] = values[c]
 	}
+	// Encode before answering: JSON escaping can expand values, and the
+	// client refuses bodies over api.MaxResponseBytes.
+	var body bytes.Buffer
+	enc := json.NewEncoder(&body)
+	enc.SetEscapeHTML(false)
+	if err := enc.Encode(resp); err != nil || body.Len() > api.MaxResponseBytes {
+		s.audit(e, "error", api.CodeTooLarge)
+		writeError(w, api.CodeTooLarge, nil)
+		return
+	}
 	s.audit(e, "allow", "")
-	writeJSON(w, http.StatusOK, resp)
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(http.StatusOK)
+	w.Write(body.Bytes())
 }
 
 func (s *Server) handleItem(w http.ResponseWriter, r *http.Request) {

@@ -5,6 +5,7 @@ import (
 	"bytes"
 	"errors"
 	"fmt"
+	"io"
 	"os"
 	"path/filepath"
 	"regexp"
@@ -50,36 +51,67 @@ var accountUUID = regexp.MustCompile(`^[A-Z0-9]{26}$`)
 // that clients receive the server's error instead of giving up first.
 const MaxRequestTimeout = 140 * time.Second
 
-// checkPrivate verifies that the configuration (which defines who may read
-// which secrets) can only be changed by the current user: the file must be a
-// regular file owned by the user with mode 0600 or stricter, and its
-// directory must be owned by the user and not writable by others.
-func checkPrivate(path string) error {
-	fi, err := os.Lstat(path)
+// maxConfigBytes bounds the size of the configuration file.
+const maxConfigBytes = 1 << 20
+
+// readPrivate reads the configuration (which defines who may read which
+// secrets) after verifying that only the current user can change it: the
+// file must be a regular file (not a symlink) owned by the user with mode
+// 0600 or stricter, in a directory owned by the user and not writable by
+// others. The checks are made on the very file descriptors the content is
+// read through, so swapping the file or an ancestor directory between check
+// and read has no effect.
+func readPrivate(path string) ([]byte, error) {
+	dirPath, name := filepath.Split(path)
+	if dirPath == "" {
+		dirPath = "."
+	}
+	root, err := os.OpenRoot(dirPath)
 	if err != nil {
-		return err
+		return nil, err
 	}
-	if !fi.Mode().IsRegular() {
-		return fmt.Errorf("%s must be a regular file (not a symlink)", path)
-	}
-	if err := checkOwner(path, fi); err != nil {
-		return err
-	}
-	if fi.Mode().Perm()&0o077 != 0 {
-		return fmt.Errorf("%s is accessible by group or others (mode %v); chmod 600 it", path, fi.Mode().Perm())
-	}
-	dir := filepath.Dir(path)
-	di, err := os.Stat(dir)
+	defer root.Close()
+
+	di, err := root.Stat(".")
 	if err != nil {
-		return err
+		return nil, err
 	}
-	if err := checkOwner(dir, di); err != nil {
-		return err
+	if err := checkOwner(dirPath, di); err != nil {
+		return nil, err
 	}
 	if di.Mode().Perm()&0o022 != 0 {
-		return fmt.Errorf("%s is writable by group or others (mode %v); chmod 700 it", dir, di.Mode().Perm())
+		return nil, fmt.Errorf("%s is writable by group or others (mode %v); chmod 700 it", dirPath, di.Mode().Perm())
 	}
-	return nil
+
+	f, err := root.OpenFile(name, os.O_RDONLY|syscall.O_NOFOLLOW, 0)
+	if err != nil {
+		if errors.Is(err, syscall.ELOOP) {
+			return nil, fmt.Errorf("%s must be a regular file, not a symlink", path)
+		}
+		return nil, err
+	}
+	defer f.Close()
+	fi, err := f.Stat()
+	if err != nil {
+		return nil, err
+	}
+	if !fi.Mode().IsRegular() {
+		return nil, fmt.Errorf("%s must be a regular file", path)
+	}
+	if err := checkOwner(path, fi); err != nil {
+		return nil, err
+	}
+	if fi.Mode().Perm()&0o077 != 0 {
+		return nil, fmt.Errorf("%s is accessible by group or others (mode %v); chmod 600 it", path, fi.Mode().Perm())
+	}
+	b, err := io.ReadAll(io.LimitReader(f, maxConfigBytes+1))
+	if err != nil {
+		return nil, err
+	}
+	if len(b) > maxConfigBytes {
+		return nil, fmt.Errorf("%s is too large", path)
+	}
+	return b, nil
 }
 
 func checkOwner(path string, fi os.FileInfo) error {
@@ -104,10 +136,7 @@ func Load(path string) (*Config, *policy.Policy, error) {
 	if err != nil {
 		return nil, nil, err
 	}
-	if err := checkPrivate(path); err != nil {
-		return nil, nil, err
-	}
-	b, err := os.ReadFile(path)
+	b, err := readPrivate(path)
 	if err != nil {
 		return nil, nil, err
 	}
@@ -130,6 +159,12 @@ func Parse(b []byte) (*Config, *policy.Policy, error) {
 	dec.KnownFields(true)
 	if err := dec.Decode(cfg); err != nil {
 		return nil, nil, fmt.Errorf("parsing config: %w", err)
+	}
+	// A second document would be silently ignored, e.g. rules appended
+	// after "---" that the operator believes are in effect.
+	var extra any
+	if err := dec.Decode(&extra); !errors.Is(err, io.EOF) {
+		return nil, nil, errors.New("parsing config: only one YAML document is allowed")
 	}
 
 	var err error
