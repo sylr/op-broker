@@ -3,6 +3,8 @@ module github.com/sylr/op-broker
 go 1.27.3
 
 require (
+	github.com/spf13/cobra v1.10.2
+	github.com/spf13/pflag v1.0.10
 	gopkg.in/yaml.v3 v3.0.1
 	tailscale.com v1.104.4
 )
@@ -23,6 +25,7 @@ require (
 	github.com/google/go-cmp v0.7.0 // indirect
 	github.com/hdevalence/ed25519consensus v0.2.0 // indirect
 	github.com/huin/goupnp v1.3.0 // indirect
+	github.com/inconshreveable/mousetrap v1.1.0 // indirect
 	github.com/jsimonetti/rtnetlink v1.4.2 // indirect
 	github.com/klauspost/compress v1.20.0 // indirect
 	github.com/mdlayher/netlink v1.11.2 // indirect

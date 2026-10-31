@@ -2,12 +2,12 @@ package main
 
 import (
 	"errors"
-	"flag"
 	"fmt"
-	"io"
 	"path/filepath"
-	"slices"
+	"strconv"
 	"testing"
+
+	"github.com/spf13/cobra"
 
 	"github.com/sylr/op-broker/internal/api"
 	"github.com/sylr/op-broker/internal/client"
@@ -26,48 +26,13 @@ func TestFailExitCodes(t *testing.T) {
 		{&client.Error{Code: api.CodeOpFailed}, exitError},
 		{&client.Error{Code: api.CodeBadRequest}, exitError},
 		{errors.New("connection refused"), exitError},
-		{errUsage{}, exitError},
-		{flag.ErrHelp, exitOK},
+		{&usageError{&cobra.Command{Use: "x"}, errors.New("bad")}, exitError},
+		{nil, exitOK},
 	}
 	for _, tt := range tests {
 		if got := fail(tt.err); got != tt.want {
 			t.Errorf("fail(%v) = %d, want %d", tt.err, got, tt.want)
 		}
-	}
-}
-
-func TestParseInterspersed(t *testing.T) {
-	tests := []struct {
-		args      []string
-		wantPos   []string
-		wantVault string
-	}{
-		{[]string{"get", "item", "--vault", "Dev"}, []string{"get", "item"}, "Dev"},
-		{[]string{"--vault=Dev", "get", "item"}, []string{"get", "item"}, "Dev"},
-		{[]string{"get", "--vault", "Dev", "item"}, []string{"get", "item"}, "Dev"},
-		{[]string{"get", "--", "--vault"}, []string{"get", "--vault"}, ""},
-		{[]string{"--vault", "Dev", "--", "get", "-x"}, []string{"get", "-x"}, "Dev"},
-	}
-	for _, tt := range tests {
-		fs := flag.NewFlagSet("t", flag.ContinueOnError)
-		fs.SetOutput(io.Discard)
-		vault := fs.String("vault", "", "")
-		pos, err := parseInterspersed(fs, tt.args)
-		if err != nil {
-			t.Errorf("%v: %v", tt.args, err)
-			continue
-		}
-		if !slices.Equal(pos, tt.wantPos) || *vault != tt.wantVault {
-			t.Errorf("%v: pos=%v vault=%q, want pos=%v vault=%q", tt.args, pos, *vault, tt.wantPos, tt.wantVault)
-		}
-	}
-}
-
-func TestParseInterspersedUnknownFlag(t *testing.T) {
-	fs := flag.NewFlagSet("t", flag.ContinueOnError)
-	fs.SetOutput(io.Discard)
-	if _, err := parseInterspersed(fs, []string{"get", "--bogus"}); err == nil {
-		t.Fatal("unknown flag accepted")
 	}
 }
 
@@ -140,20 +105,26 @@ contexts:
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			g := &globals{cfg: cfg, set: map[string]bool{}, getenv: func(k string) string { return tt.env[k] }}
+			g := &globals{cfg: cfg, getenv: func(k string) string { return tt.env[k] }}
+			pf := newRootCmd(g).PersistentFlags()
+			set := func(name, value string) {
+				if err := pf.Set(name, value); err != nil {
+					t.Fatal(err)
+				}
+			}
 			if tt.flags.context != "" {
-				g.context, g.set["context"] = tt.flags.context, true
+				set("context", tt.flags.context)
 			}
 			if tt.flags.server != "" {
-				g.server, g.set["server"] = tt.flags.server, true
+				set("server", tt.flags.server)
 			}
 			if tt.flags.broker == "-" {
-				g.set["broker"] = true
+				set("broker", "")
 			} else if tt.flags.broker != "" {
-				g.broker, g.set["broker"] = tt.flags.broker, true
+				set("broker", tt.flags.broker)
 			}
 			if tt.flags.allowNonTailnet != nil {
-				g.allowNonTailnet, g.set["allow-non-tailnet"] = *tt.flags.allowNonTailnet, true
+				set("allow-non-tailnet", strconv.FormatBool(*tt.flags.allowNonTailnet))
 			}
 			got, err := g.settings(tt.pin)
 			if (err != nil) != tt.wantErr || got != tt.want {
@@ -162,7 +133,7 @@ contexts:
 		})
 	}
 
-	g := &globals{cfg: &client.Config{}, set: map[string]bool{}, getenv: func(string) string { return "" }}
+	g := &globals{cfg: &client.Config{}, getenv: func(string) string { return "" }}
 	if got, err := g.settings(""); err != nil || got != (settings{server: client.DefaultServer}) {
 		t.Fatalf("no config: %+v, %v", got, err)
 	}

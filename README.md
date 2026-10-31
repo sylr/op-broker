@@ -63,6 +63,19 @@ With a Homebrew install, point the LaunchAgent at Homebrew's `opbd` (step 3
 below) with `make install-agent INSTALL_DIR=$(brew --prefix)/bin`, run from a
 checkout.
 
+The cask and the Linux packages install shell completions for `opb` (bash,
+zsh, fish). Otherwise, load them from `opb completion <shell>`, for example
+in `~/.zshrc`:
+
+```sh
+source <(opb completion zsh)
+```
+
+Completions cover commands and flags, and come from the configuration file
+for contexts, servers, brokers and bundles. References (`opb read`), vaults
+and items (`opb item get`) are those used by bundles: the broker has no
+listing API.
+
 ### Server (Mac)
 
 1. Write the configuration from [`config.example.yaml`](config.example.yaml):
