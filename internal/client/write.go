@@ -16,7 +16,12 @@ var rename = os.Rename
 // file atomically. It refuses to write through a symlink or over anything
 // that is not a regular file. Existing permissions are not preserved: the
 // result is always 0600.
-func WriteFileAtomic(path string, data []byte) (err error) {
+func WriteFileAtomic(path string, data []byte) error {
+	return writeFileAtomic(path, data, 0o600)
+}
+
+// writeFileAtomic is WriteFileAtomic with the given permissions.
+func writeFileAtomic(path string, data []byte, perm fs.FileMode) (err error) {
 	fi, err := os.Lstat(path)
 	switch {
 	case errors.Is(err, fs.ErrNotExist):
@@ -38,7 +43,7 @@ func WriteFileAtomic(path string, data []byte) (err error) {
 			os.Remove(tmp.Name())
 		}
 	}()
-	if err = tmp.Chmod(0o600); err != nil {
+	if err = tmp.Chmod(perm); err != nil {
 		return err
 	}
 	if _, err = tmp.Write(data); err != nil {

@@ -87,6 +87,7 @@ archives:
   files:
   - README.md
   - LICENSE*
+  - opb.example.yaml
 
 # macOS: client and server, plus what the server needs to be set up. This is
 # the archive the Homebrew cask installs.
@@ -101,6 +102,7 @@ archives:
   - README.md
   - LICENSE*
   - config.example.yaml
+  - opb.example.yaml
   - contrib/*
 
 nfpms:
@@ -127,6 +129,10 @@ nfpms:
   # MIT requires the notice to ship with every copy.
   - src: ./LICENSE
     dst: /usr/share/doc/opb/LICENSE
+    file_info:
+      mode: 0644
+  - src: ./opb.example.yaml
+    dst: /usr/share/doc/opb/opb.example.yaml
     file_info:
       mode: 0644
 

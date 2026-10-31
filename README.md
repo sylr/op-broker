@@ -142,6 +142,56 @@ Address ranges alone would not be enough, because other networks also use
 the CGNAT range. `--allow-non-tailnet` (or `OPB_ALLOW_NON_TAILNET=1`) turns
 both checks off. It is insecure and meant for testing only.
 
+#### Configuration file
+
+Instead of environment variables, `opb` can read contexts (brokers) and env
+bundles from `~/.config/op-broker/opb.yaml` (`$XDG_CONFIG_HOME/op-broker/opb.yaml`
+if set, or `$OPB_CONFIG`, or `--config`). See
+[`opb.example.yaml`](opb.example.yaml). The file holds no secrets, but it
+decides which broker gets your requests. On Unix, `opb` therefore refuses it
+if it, or any directory that could redirect it, is writable by group or others
+or owned by another user. "Any directory" means the ancestors of the path and
+of every symlink target on the way to the file. Root-owned files and sticky
+directories are allowed, so files from the Nix store work. On Windows these
+checks are not made: keep the file in your profile directory, whose ACLs
+protect it.
+
+```yaml
+current_context: home
+contexts:
+  home:
+    server: http://op-broker.<tailnet>.ts.net
+  work:
+    server: http://op-broker.<other-tailnet>.ts.net
+    broker: tag:op-broker
+bundles:
+  aws-prod:
+    context: work          # optional: always use this context
+    env:
+    - name: AWS_ACCESS_KEY_ID
+      ref: op://<vault>/aws-prod/access key id
+    - name: AWS_SECRET_ACCESS_KEY
+      ref: op://<vault>/aws-prod/secret access key
+```
+
+- **Contexts.** The active context is `--context`, then `$OPB_CONTEXT`, then
+  `current_context`. `opb context use <name>` rewrites only the
+  `current_context` line, so comments are kept; it refuses symlinked files,
+  which are usually managed by another tool.
+- **Overrides.** Every context needs a `server`. Flags override environment
+  variables, which override the context (`--server`/`OPB_SERVER`, `--broker`/`OPB_BROKER`,
+  `--allow-non-tailnet`/`OPB_ALLOW_NON_TAILNET`). A context's `broker` and
+  `allow_non_tailnet` describe its own `server`, so they are dropped once the
+  server comes from a flag or the environment: an insecure test context can
+  never turn off verification of another server. `OPB_ALLOW_NON_TAILNET=0`
+  turns off a context's `allow_non_tailnet`.
+- **Bundles.** A bundle maps environment variable names to references. Later
+  bundles override earlier ones. A bundle with a `context` always resolves on
+  that broker: `OPB_CONTEXT`, `OPB_SERVER`, `OPB_BROKER` and
+  `OPB_ALLOW_NON_TAILNET` are ignored, and `--server`, `--broker`,
+  `--allow-non-tailnet` or a different `--context` are errors, as is
+  combining bundles pinned to different contexts.
+
 ## Usage
 
 ```sh
@@ -151,6 +201,12 @@ opb read -n "op://Dev/github/one-time password?attribute=otp"
 opb inject -i config.tpl -o config.yaml       # output written with mode 0600
 
 opb run --env-file .env -- ./deploy.sh        # DB_PASSWORD=op://Dev/postgres/password in .env
+opb run --bundle aws-prod -- terraform plan   # bundle from the configuration file
+eval "$(opb env aws-prod)"                    # export a bundle into the current shell
+
+opb context list                              # * marks the active context
+opb context show [name]                       # effective server and broker identity
+opb context use work
 
 opb item get postgres --vault Dev             # whole item as JSON (needs an items grant)
 ```
@@ -238,14 +294,18 @@ launchctl kill HUP gui/$(id -u)/com.sylr.op-broker
 
 - **`opb run` does not mask output.** Unlike `op run`, secrets printed by
   the command appear in clear.
+- **`opb env` puts secrets in your shell.** Every command the shell runs
+  afterwards inherits them; prefer `opb run --bundle` when one command needs
+  them.
 - `inject` supports `{{ op://... }}` with `$VAR` / `${VAR}` inside the
   reference. Bare references, escapes and defaults are rejected rather than
   passed through.
 - `run` only resolves variables whose whole value is a reference, as `op run`
   does. Precedence also matches `op run`: env files override the shell
-  environment, and later files override earlier ones. The command is looked up
-  in the resulting `PATH`, and relative entries are skipped. The env-file
-  format is a subset of dotenv (see `ParseDotenv`) with no interpolation.
+  environment, and later files override earlier ones; `--bundle` variables
+  override both. The command is looked up in the resulting `PATH`, and
+  relative entries are skipped. The env-file format is a subset of dotenv
+  (see `ParseDotenv`) with no interpolation.
 - Values must be UTF-8 text. Binary file attachments are rejected.
 - All `op` calls are serialized, and a batch is all-or-nothing: if one
   reference is denied, missing or fails, nothing is returned. One command can

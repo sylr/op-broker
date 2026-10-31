@@ -1,0 +1,46 @@
+# opb (client) configuration. Install as
+#   ~/.config/op-broker/opb.yaml   (or $XDG_CONFIG_HOME/op-broker/opb.yaml)
+# or point $OPB_CONFIG or --config at it. On Unix, neither the file nor any
+# directory leading to it (symlinks included) may be writable by group or
+# others. It holds no secrets: only where to find them.
+
+# Context used when neither --context nor $OPB_CONTEXT is set. Change it with
+# `opb context use <name>`, which rewrites only this line.
+current_context: home
+
+# A context describes one broker; server is required. Flags (--server, --broker) and environment
+# variables (OPB_SERVER, OPB_BROKER) override these settings; once the server
+# is overridden, the context's broker and allow_non_tailnet no longer apply.
+contexts:
+  home:
+    # Full MagicDNS name of the broker.
+    server: http://op-broker.<tailnet>.ts.net
+    # Expected tailnet identity of the broker: user:<login>, tag:<name> or
+    # node:<stable-id>. Optional on your own untagged machines (the default is
+    # an untagged node owned by the same user); required on tagged machines.
+    broker: user:<you@example.com>
+  work:
+    server: http://op-broker.<other-tailnet>.ts.net
+    broker: tag:op-broker
+
+# A bundle is a set of environment variables to populate with secrets:
+#   opb run --bundle <name> -- <command>   runs <command> with them set
+#   eval "$(opb env <name>)"               exports them into the shell
+bundles:
+  postgres:
+    env:
+    - name: PGUSER
+      ref: op://<vault>/postgres/username
+    - name: PGPASSWORD
+      ref: op://<vault>/postgres/password
+
+  aws-prod:
+    # Optional: always resolve this bundle on the work broker, whatever the
+    # current context. Environment overrides (OPB_SERVER, ...) are ignored for
+    # it, and conflicting flags are errors.
+    context: work
+    env:
+    - name: AWS_ACCESS_KEY_ID
+      ref: op://<vault>/aws-prod/access key id
+    - name: AWS_SECRET_ACCESS_KEY
+      ref: op://<vault>/aws-prod/secret access key
