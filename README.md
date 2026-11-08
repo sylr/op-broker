@@ -51,6 +51,13 @@ On macOS, with Homebrew (installs `opb` and `opbd`):
 brew install --cask sylr/tap/op-broker
 ```
 
+With Nix, from [sylr/nur-packages](https://github.com/sylr/nur-packages)
+(`opb` on Linux, `opb` and `opbd` on macOS):
+
+```sh
+nix profile install github:sylr/nur-packages#op-broker
+```
+
 On Linux, install the `opb` `.deb` or `.rpm` from the
 [releases](https://github.com/sylr/op-broker/releases), or use the
 archives (which also exist for Windows and FreeBSD). From source:
@@ -61,11 +68,11 @@ make install          # go install opb and opbd into GOBIN (or GOPATH/bin)
 
 With a Homebrew install, point the LaunchAgent at Homebrew's `opbd` (step 3
 below) with `make install-agent INSTALL_DIR=$(brew --prefix)/bin`, run from a
-checkout.
+checkout. With Nix, use `INSTALL_DIR=$HOME/.nix-profile/bin`.
 
-The cask and the Linux packages install shell completions for `opb` (bash,
-zsh, fish). Otherwise, load them from `opb completion <shell>`, for example
-in `~/.zshrc`:
+The cask, the Nix package and the Linux packages install shell completions
+for `opb` (bash, zsh, fish). Otherwise, load them from
+`opb completion <shell>`, for example in `~/.zshrc`:
 
 ```sh
 source <(opb completion zsh)

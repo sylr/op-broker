@@ -100,7 +100,8 @@ jobs:
     - name: goreleaser check
       run: nix develop .#ci-goreleaser --command goreleaser check
 
-    # Build every target, archive, package and the cask without publishing,
-    # so release breakage is caught before a tag is pushed.
+    # Build every target, archive, package, the cask and the Nix derivation
+    # without publishing, so release breakage is caught before a tag is
+    # pushed.
     - name: goreleaser snapshot
       run: nix develop .#ci-goreleaser --command goreleaser release --snapshot --clean --skip=publish

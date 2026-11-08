@@ -213,6 +213,37 @@ homebrew_casks:
     first interactive tailnet login and the LaunchAgent setup:
       https://github.com/sylr/op-broker#install
 
+# Nix derivation in the NUR repository, wrapping the release archives: opb on
+# Linux, opb and opbd on macOS. GoReleaser only writes pkgs/op-broker; the
+# repository's default.nix must callPackage it. The SHA-256 of each archive is
+# computed with nix-hash, so the release must run where Nix is installed.
+nix:
+- name: op-broker
+  ids:
+  - default
+  - darwin
+  path: pkgs/op-broker/default.nix
+  commit_msg_template: "op-broker: {{ .Tag }}"
+  homepage: "https://github.com/sylr/op-broker"
+  description: "Resolve 1Password op:// secret references over Tailscale"
+  license: mit
+  skip_upload: auto
+  repository:
+    owner: sylr
+    name: nur-packages
+    token: "{{ .Env.NUR_GITHUB_TOKEN }}"
+  # GoReleaser guesses the install from the first archive and would only copy
+  # opb. opbd is only in the macOS archives.
+  install: |-
+    mkdir -p $out/bin
+    cp -v ./opb $out/bin/opb
+    if [ -e ./opbd ]; then cp -v ./opbd $out/bin/opbd; fi
+  extra_install: |-
+    installShellCompletion --cmd opb \
+      --bash ./completions/opb.bash \
+      --zsh ./completions/_opb \
+      --fish ./completions/opb.fish
+
 changelog:
   sort: asc
   filters:

@@ -38,6 +38,8 @@ jobs:
         # PAT (or fine-grained token) with contents:write on sylr/homebrew-tap,
         # since the built-in GITHUB_TOKEN is scoped only to this repo.
         HOMEBREW_TAP_GITHUB_TOKEN: ${{ secrets.HOMEBREW_TAP_GITHUB_TOKEN }}
+        # Same, with contents:write on sylr/nur-packages.
+        NUR_GITHUB_TOKEN: ${{ secrets.NUR_GITHUB_TOKEN }}
 
     # Mint a GitHub build-provenance attestation for every released file
     # (archives, DEBs, RPMs, SBOMs) listed in goreleaser's checksum file.
