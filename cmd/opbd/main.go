@@ -85,10 +85,8 @@ func run(configPath string, verbose bool) error {
 		Hostname: cfg.Hostname,
 		Dir:      cfg.StateDir,
 		// UserLogf prints the login URL when no TS_AUTHKEY is set.
-		UserLogf: func(format string, args ...any) {
-			logger.Info(fmt.Sprintf(format, args...), slog.String("component", "tsnet"))
-		},
-		Logf: func(string, ...any) {},
+		UserLogf: userLogf(logger, os.Stderr, cfg.LogFile != ""),
+		Logf:     func(string, ...any) {},
 	}
 	if verbose {
 		ts.Logf = func(format string, args ...any) {
@@ -187,6 +185,19 @@ func run(configPath string, verbose bool) error {
 		return err
 	}
 	return nil
+}
+
+// userLogf returns the tsnet UserLogf. Its messages, including the login
+// URL of the first start, go to the audit log and, when that log is a file,
+// to stderr too: the operator running opbd by hand must see them.
+func userLogf(logger *slog.Logger, stderr io.Writer, toStderr bool) func(string, ...any) {
+	return func(format string, args ...any) {
+		msg := fmt.Sprintf(format, args...)
+		logger.Info(msg, slog.String("component", "tsnet"))
+		if toStderr {
+			fmt.Fprintln(stderr, "opbd:", msg)
+		}
+	}
 }
 
 // tsWhoIs adapts the tsnet local client to server.WhoIser.
