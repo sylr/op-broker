@@ -106,7 +106,6 @@ archives:
   - config.example.yaml
   - opb.example.yaml
   - completions/*
-  - contrib/*
 
 nfpms:
 # Linux packages only carry the client.
@@ -209,9 +208,10 @@ homebrew_casks:
     end
   caveats: |
     opbd must run as a LaunchAgent in your GUI session (1Password desktop-app
-    integration needs it). See the README for the configuration file, the
-    first interactive tailnet login and the LaunchAgent setup:
-      https://github.com/sylr/op-broker#install
+    integration needs it). Write the configuration file and join the tailnet
+    once by running opbd by hand, then install the LaunchAgent with:
+      opbd agent install
+    See https://github.com/sylr/op-broker#server-mac
 
 # Nix derivation in the NUR repository, wrapping the release archives: opb on
 # Linux, opb and opbd on macOS. GoReleaser only writes pkgs/op-broker; the

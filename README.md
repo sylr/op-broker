@@ -66,10 +66,6 @@ archives (which also exist for Windows and FreeBSD). From source:
 make install          # go install opb and opbd into GOBIN (or GOPATH/bin)
 ```
 
-With a Homebrew install, point the LaunchAgent at Homebrew's `opbd` (step 3
-below) with `make install-agent INSTALL_DIR=$(brew --prefix)/bin`, run from a
-checkout. With Nix, use `INSTALL_DIR=$HOME/.nix-profile/bin`.
-
 The cask, the Nix package and the Linux packages install shell completions
 for `opb` (bash, zsh, fish). Otherwise, load them from
 `opb completion <shell>`, for example in `~/.zshrc`:
@@ -104,9 +100,10 @@ listing API.
 
    An untagged auth key (`TS_AUTHKEY=tskey-auth-... opbd`) works too. Don't
    use a tagged key. The node state is saved in `state_dir`, so later starts
-   need no login. Stop it with Ctrl-C.
+   need no login. Stop it with Ctrl-C. The node is named after `hostname`
+   (`op-broker` by default), and clients reach it by that name.
 
-   In the admin console, **disable key expiry** for the `op-broker` node.
+   In the admin console, **disable key expiry** for the broker node.
    Otherwise the node expires after the tailnet's key lifetime (180 days by
    default), and `opbd` needs a new interactive login.
 
@@ -114,8 +111,18 @@ listing API.
    daemon:
 
    ```sh
-   make install install-agent    # from source: writes ~/Library/LaunchAgents/com.sylr.op-broker.plist and loads it
+   opbd agent install
    ```
+
+   It checks the configuration, writes
+   `~/Library/LaunchAgents/com.sylr.op-broker.plist` and loads it: launchd
+   then starts `opbd` at login and restarts it if it exits. The agent runs
+   `opbd` from the path you called it by, so call it through a path that
+   survives upgrades (`/opt/homebrew/bin/opbd`, `~/.nix-profile/bin/opbd`),
+   not its package-store target, or pass `-opbd`. Startup errors and tailnet
+   login messages go to `~/Library/Logs/op-broker.stderr.log`. Run it again
+   after moving the configuration (`-config`). `opbd agent uninstall` stops
+   the agent and removes the plist.
 
 4. Restrict who can reach the broker in your tailnet policy. The broker is an
    ordinary device of yours, so name it with a host alias set to its

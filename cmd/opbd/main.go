@@ -36,6 +36,18 @@ var (
 )
 
 func main() {
+	if len(os.Args) > 1 && os.Args[1] == "agent" {
+		if err := agentMain(os.Args[2:], os.Stdout); err != nil {
+			fmt.Fprintln(os.Stderr, "opbd agent:", err)
+			os.Exit(1)
+		}
+		return
+	}
+
+	flag.Usage = func() {
+		fmt.Fprintf(flag.CommandLine.Output(), "Usage:\n  opbd [flags]\n  opbd agent install|uninstall [flags]\n\nFlags:\n")
+		flag.PrintDefaults()
+	}
 	configPath := flag.String("config", config.DefaultPath(), "configuration file")
 	verbose := flag.Bool("verbose", false, "log tsnet internals")
 	showVersion := flag.Bool("version", false, "print the version and exit")
