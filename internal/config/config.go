@@ -6,15 +6,18 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"maps"
 	"os"
 	"path/filepath"
 	"regexp"
+	"slices"
 	"strings"
 	"syscall"
 	"time"
 
 	"gopkg.in/yaml.v3"
 
+	"github.com/sylr/op-broker/internal/api"
 	"github.com/sylr/op-broker/internal/policy"
 )
 
@@ -37,15 +40,71 @@ type Config struct {
 // Op configures the 1Password CLI.
 type Op struct {
 	Path string `yaml:"path"`
-	// Account is the UUID of the 1Password account to read from (see
-	// `op account list`). It is required so that a change of the default
-	// account can never change what a grant refers to.
+	// Account is the UUID of the only 1Password account to read from. It is
+	// the legacy form of Accounts: Parse turns it into Accounts with the
+	// single alias LegacyAccount, which is then the default.
 	Account string `yaml:"account"`
+	// Accounts maps account aliases, which clients and rules use, to
+	// 1Password account UUIDs (see `op account get --account <url>`). UUIDs
+	// are required so that a change of op's default account can never change
+	// what a grant refers to.
+	Accounts map[string]string `yaml:"accounts"`
+	// DefaultAccount is the alias of the account used by requests that name
+	// none and by rules that list none. It is required with more than one
+	// account.
+	DefaultAccount string `yaml:"default_account"`
 	// Timeout bounds a single op invocation.
 	Timeout time.Duration `yaml:"timeout"`
 }
 
+// LegacyAccount is the alias of the account configured with op.account.
+const LegacyAccount = "default"
+
 var accountUUID = regexp.MustCompile(`^[A-Z0-9]{26}$`)
+
+// normalizeAccounts validates the accounts and folds the legacy op.account
+// into Accounts and DefaultAccount.
+func (o *Op) normalizeAccounts() error {
+	if o.Account != "" {
+		if len(o.Accounts) > 0 || o.DefaultAccount != "" {
+			return errors.New("op.account cannot be combined with op.accounts or op.default_account")
+		}
+		if !accountUUID.MatchString(o.Account) {
+			return errors.New("op.account must be an account UUID (see `op account get --account <url>`)")
+		}
+		o.Accounts = map[string]string{LegacyAccount: o.Account}
+		o.DefaultAccount = LegacyAccount
+		return nil
+	}
+	if len(o.Accounts) == 0 {
+		return errors.New("op.accounts is required (or the single op.account)")
+	}
+	byUUID := make(map[string]string, len(o.Accounts))
+	for alias, uuid := range o.Accounts {
+		if !api.ValidAccount(alias) {
+			return fmt.Errorf("op.accounts: invalid alias %q: want lowercase letters, digits, _ and -, at most 32", alias)
+		}
+		if !accountUUID.MatchString(uuid) {
+			return fmt.Errorf("op.accounts.%s must be an account UUID (see `op account get --account <url>`)", alias)
+		}
+		if other, ok := byUUID[uuid]; ok {
+			return fmt.Errorf("op.accounts: %q and %q are the same account", min(alias, other), max(alias, other))
+		}
+		byUUID[uuid] = alias
+	}
+	if o.DefaultAccount == "" {
+		if len(o.Accounts) > 1 {
+			return errors.New("op.default_account is required with more than one account")
+		}
+		for alias := range o.Accounts {
+			o.DefaultAccount = alias
+		}
+	}
+	if _, ok := o.Accounts[o.DefaultAccount]; !ok {
+		return fmt.Errorf("op.default_account: unknown account %q", o.DefaultAccount)
+	}
+	return nil
+}
 
 // MaxRequestTimeout keeps the server deadline below the client timeout, so
 // that clients receive the server's error instead of giving up first.
@@ -181,8 +240,6 @@ func Parse(b []byte) (*Config, *policy.Policy, error) {
 	switch {
 	case cfg.Hostname == "":
 		return nil, nil, errors.New("hostname is required")
-	case !accountUUID.MatchString(cfg.Op.Account):
-		return nil, nil, errors.New("op.account must be an account UUID (see `op account list`)")
 	case !filepath.IsAbs(cfg.Op.Path):
 		return nil, nil, errors.New("op.path must be an absolute path")
 	case cfg.Op.Timeout <= 0:
@@ -193,7 +250,11 @@ func Parse(b []byte) (*Config, *policy.Policy, error) {
 		return nil, nil, fmt.Errorf("request_timeout must be at most %s (clients give up after 150s)", MaxRequestTimeout)
 	}
 
-	pol, err := policy.Compile(cfg.Rules)
+	if err := cfg.Op.normalizeAccounts(); err != nil {
+		return nil, nil, err
+	}
+
+	pol, err := policy.Compile(cfg.Rules, slices.Collect(maps.Keys(cfg.Op.Accounts)), cfg.Op.DefaultAccount)
 	if err != nil {
 		return nil, nil, err
 	}

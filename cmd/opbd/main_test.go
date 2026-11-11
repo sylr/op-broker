@@ -7,6 +7,8 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"github.com/sylr/op-broker/internal/config"
 )
 
 func TestUserLogf(t *testing.T) {
@@ -22,6 +24,93 @@ func TestUserLogf(t *testing.T) {
 		if got := strings.Contains(stderr.String(), url); got != toStderr {
 			t.Errorf("toStderr=%v: URL on stderr = %v: %q", toStderr, got, stderr.String())
 		}
+	}
+}
+
+func TestReloadPolicy(t *testing.T) {
+	const doc = `
+op:
+  accounts:
+    work: ABCDEFGHIJKLMNOPQRSTUVWXYZ
+    personal: ZYXWVUTSRQPONMLKJIHGFEDCBA
+  default_account: work
+rules:
+  - principals: ["user:sylvain@formance.com"]
+    accounts: [personal]
+    read: ["op://Private/**"]
+`
+	path := filepath.Join(t.TempDir(), "config.yaml")
+	write := func(s string) {
+		t.Helper()
+		if err := os.WriteFile(path, []byte(s), 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	write(doc)
+	cfg, _, err := config.Load(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	running := cfg.Op
+
+	if _, err := reloadPolicy(path, running); err != nil {
+		t.Fatalf("unchanged accounts: %v", err)
+	}
+	for name, changed := range map[string]string{
+		"alias removed": strings.Replace(doc, "    personal: ZYXWVUTSRQPONMLKJIHGFEDCBA\n", "", 1),
+		"alias renamed": strings.ReplaceAll(doc, "personal", "home"),
+		"uuid changed":  strings.Replace(doc, "ZYXWVUTSRQPONMLKJIHGFEDCBA", "ZZZZZZZZZZZZZZZZZZZZZZZZZZ", 1),
+		"alias added":   strings.Replace(doc, "  default_account:", "    extra: ZZZZZZZZZZZZZZZZZZZZZZZZZZ\n  default_account:", 1),
+		"new default":   strings.Replace(doc, "default_account: work", "default_account: personal", 1),
+	} {
+		write(changed)
+		if _, err := reloadPolicy(path, running); err == nil {
+			t.Errorf("%s: reload accepted", name)
+		}
+	}
+}
+
+func TestReloadPolicyLegacy(t *testing.T) {
+	const legacy = `
+op:
+  account: ABCDEFGHIJKLMNOPQRSTUVWXYZ
+rules:
+  - principals: ["user:sylvain@formance.com"]
+    read: ["op://Private/**"]
+`
+	path := filepath.Join(t.TempDir(), "config.yaml")
+	write := func(s string) {
+		t.Helper()
+		if err := os.WriteFile(path, []byte(s), 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	write(legacy)
+	cfg, _, err := config.Load(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	running := cfg.Op
+
+	accepted := map[string]string{
+		"unchanged": legacy,
+		// The same account under its legacy alias.
+		"explicit default": strings.Replace(legacy, "  account: ABCDEFGHIJKLMNOPQRSTUVWXYZ",
+			"  accounts:\n    default: ABCDEFGHIJKLMNOPQRSTUVWXYZ\n  default_account: default", 1),
+		"implied default": strings.Replace(legacy, "  account: ABCDEFGHIJKLMNOPQRSTUVWXYZ",
+			"  accounts:\n    default: ABCDEFGHIJKLMNOPQRSTUVWXYZ", 1),
+	}
+	for name, doc := range accepted {
+		write(doc)
+		if _, err := reloadPolicy(path, running); err != nil {
+			t.Errorf("%s: %v", name, err)
+		}
+	}
+
+	// Same UUID, but rules and clients name it differently.
+	write(strings.Replace(legacy, "  account: ABCDEFGHIJKLMNOPQRSTUVWXYZ", "  accounts:\n    work: ABCDEFGHIJKLMNOPQRSTUVWXYZ", 1))
+	if _, err := reloadPolicy(path, running); err == nil {
+		t.Error("renamed legacy account: reload accepted")
 	}
 }
 

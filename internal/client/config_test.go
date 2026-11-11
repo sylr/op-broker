@@ -81,6 +81,9 @@ func TestParseConfigErrors(t *testing.T) {
 		{"bad ref", "bundles:\n  b:\n    env: [{name: A, ref: op://V/i}]\n"},
 		{"duplicate env name", "bundles:\n  b:\n    env: [{name: A, ref: op://V/i/f}, {name: A, ref: op://V/i/g}]\n"},
 		{"second document", "contexts: {}\n---\ncurrent_context: x\n"},
+		{"bad context account", "contexts:\n  a:\n    server: x\n    account: Work\n"},
+		{"context account UUID", "contexts:\n  a:\n    server: x\n    account: ABCDEFGHIJKLMNOPQRSTUVWXYZ\n"},
+		{"bad bundle account", "bundles:\n  b:\n    account: 'work account'\n    env: [{name: A, ref: op://V/i/f}]\n"},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -127,8 +130,8 @@ func TestBundleEnv(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if pin != "work" {
-		t.Fatalf("pin = %q, want work", pin)
+	if pin != (Pin{Context: "work"}) {
+		t.Fatalf("pin = %+v, want context work", pin)
 	}
 	got := MergeEnv(nil, vars)
 	want := []string{
@@ -140,14 +143,49 @@ func TestBundleEnv(t *testing.T) {
 		t.Fatalf("env = %q, want %q", got, want)
 	}
 
-	if _, pin, _ := cfg.BundleEnv([]string{"db"}); pin != "" {
-		t.Fatalf("unpinned bundle pinned %q", pin)
+	if _, pin, _ := cfg.BundleEnv([]string{"db"}); pin != (Pin{}) {
+		t.Fatalf("unpinned bundle pinned %+v", pin)
 	}
 	if _, _, err := cfg.BundleEnv([]string{"aws", "other"}); err == nil {
 		t.Fatal("bundles pinned to different contexts were combined")
 	}
 	if _, _, err := cfg.BundleEnv([]string{"nope"}); err == nil {
 		t.Fatal("unknown bundle accepted")
+	}
+}
+
+func TestBundleAccounts(t *testing.T) {
+	cfg := mustParseConfig(t, `
+contexts:
+  home:
+    server: http://home
+    account: personal
+bundles:
+  db:
+    env: [{name: A, ref: op://V/i/a}]
+  mine:
+    account: personal
+    env: [{name: B, ref: op://V/i/b}]
+  mine-too:
+    context: home
+    account: personal
+    env: [{name: C, ref: op://V/i/c}]
+  theirs:
+    account: work
+    env: [{name: D, ref: op://V/i/d}]
+`)
+	if got := cfg.Contexts["home"].Account; got != "personal" {
+		t.Fatalf("context account = %q", got)
+	}
+	_, pin, err := cfg.BundleEnv([]string{"db", "mine", "mine-too"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if pin != (Pin{Context: "home", Account: "personal"}) {
+		t.Fatalf("pin = %+v", pin)
+	}
+	if _, _, err := cfg.BundleEnv([]string{"mine", "theirs"}); err == nil {
+		t.Fatal("bundles pinned to different accounts were combined")
 	}
 }
 

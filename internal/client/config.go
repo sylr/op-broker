@@ -16,6 +16,7 @@ import (
 
 	"gopkg.in/yaml.v3"
 
+	"github.com/sylr/op-broker/internal/api"
 	"github.com/sylr/op-broker/internal/ref"
 )
 
@@ -33,13 +34,27 @@ type Context struct {
 	Server          string `yaml:"server"`
 	Broker          string `yaml:"broker"`
 	AllowNonTailnet bool   `yaml:"allow_non_tailnet"`
+	// Account is the alias, on this broker, of the account to read from
+	// when --account and OPB_ACCOUNT are not set. Empty means the broker's
+	// default account.
+	Account string `yaml:"account"`
 }
 
 // Bundle is a named set of environment variables to populate with secrets.
 type Bundle struct {
 	// Context, if set, is the context the bundle's references resolve on.
-	Context string        `yaml:"context"`
+	Context string `yaml:"context"`
+	// Account, if set, is the alias of the account the bundle's references
+	// resolve in.
+	Account string        `yaml:"account"`
 	Env     []BundleEntry `yaml:"env"`
+}
+
+// Pin holds the settings required by the bundles in use. Empty fields
+// require nothing.
+type Pin struct {
+	Context string
+	Account string
 }
 
 // BundleEntry populates the environment variable Name with the secret Ref.
@@ -158,6 +173,9 @@ func ParseConfig(b []byte) (*Config, error) {
 				return nil, fmt.Errorf("context %q: %w", name, err)
 			}
 		}
+		if c.Account != "" && !api.ValidAccount(c.Account) {
+			return nil, fmt.Errorf("context %q: invalid account %q", name, c.Account)
+		}
 	}
 	if cfg.CurrentContext != "" {
 		if _, ok := cfg.Contexts[cfg.CurrentContext]; !ok {
@@ -180,6 +198,9 @@ func (b Bundle) validate(cfg *Config) error {
 		if _, ok := cfg.Contexts[b.Context]; !ok {
 			return fmt.Errorf("unknown context %q", b.Context)
 		}
+	}
+	if b.Account != "" && !api.ValidAccount(b.Account) {
+		return fmt.Errorf("invalid account %q", b.Account)
 	}
 	if len(b.Env) == 0 {
 		return errors.New("env is empty")
@@ -228,20 +249,26 @@ func (c *Config) SelectContext(flagName, envName, pin string) (string, Context, 
 }
 
 // BundleEnv returns the variables of the named bundles, in order, with the
-// references as values, and the context they pin, if any. Bundles pinned to
-// different contexts cannot be combined, since one command talks to a
-// single broker.
-func (c *Config) BundleEnv(names []string) (vars []EnvVar, pin string, err error) {
+// references as values, and the context and account they pin, if any.
+// Bundles pinned to different contexts or accounts cannot be combined, since
+// one command talks to a single broker and reads from a single account.
+func (c *Config) BundleEnv(names []string) (vars []EnvVar, pin Pin, err error) {
 	for _, name := range names {
 		b, ok := c.Bundles[name]
 		if !ok {
-			return nil, "", fmt.Errorf("unknown bundle %q", name)
+			return nil, Pin{}, fmt.Errorf("unknown bundle %q", name)
 		}
 		if b.Context != "" {
-			if pin != "" && pin != b.Context {
-				return nil, "", fmt.Errorf("bundle %q uses context %q but another bundle uses %q", name, b.Context, pin)
+			if pin.Context != "" && pin.Context != b.Context {
+				return nil, Pin{}, fmt.Errorf("bundle %q uses context %q but another bundle uses %q", name, b.Context, pin.Context)
 			}
-			pin = b.Context
+			pin.Context = b.Context
+		}
+		if b.Account != "" {
+			if pin.Account != "" && pin.Account != b.Account {
+				return nil, Pin{}, fmt.Errorf("bundle %q uses account %q but another bundle uses %q", name, b.Account, pin.Account)
+			}
+			pin.Account = b.Account
 		}
 		for _, e := range b.Env {
 			vars = append(vars, EnvVar{Key: e.Name, Value: e.Ref})

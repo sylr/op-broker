@@ -32,12 +32,17 @@ type Error struct {
 	Status int
 	Code   api.Code
 	Refs   []string
+	// Hint, if set, is a likely cause the client adds to the message.
+	Hint string
 }
 
 func (e *Error) Error() string {
 	msg := e.Code.Message()
 	if len(e.Refs) > 0 {
 		msg += ": " + strings.Join(e.Refs, ", ")
+	}
+	if e.Hint != "" {
+		msg += " (" + e.Hint + ")"
 	}
 	return msg
 }
@@ -59,12 +64,16 @@ type Options struct {
 	// alone do not authenticate the broker: other networks use the same
 	// CGNAT range.
 	Verify Verifier
+	// Account is the alias of the server-side account every request reads
+	// from. Empty means the server's default account.
+	Account string
 }
 
 // Client is an opbd client.
 type Client struct {
-	base *url.URL
-	hc   *http.Client
+	base    *url.URL
+	hc      *http.Client
+	account string
 }
 
 // New returns a client for the server at addr (a URL or a bare host name).
@@ -79,7 +88,10 @@ func New(addr string, opts Options) (*Client, error) {
 	if u.Scheme != "http" && u.Scheme != "https" || u.Host == "" || u.User != nil {
 		return nil, fmt.Errorf("invalid server address %q", addr)
 	}
-	return &Client{base: u, hc: newHTTPClient(opts)}, nil
+	if opts.Account != "" && !api.ValidAccount(opts.Account) {
+		return nil, fmt.Errorf("invalid account %q", opts.Account)
+	}
+	return &Client{base: u, hc: newHTTPClient(opts), account: opts.Account}, nil
 }
 
 // newHTTPClient returns an HTTP client that never uses a proxy (a proxy would
@@ -137,7 +149,7 @@ func isTailnetAddr(a netip.Addr) bool {
 // Resolve returns the value of each ref, keyed by ref.
 func (c *Client) Resolve(ctx context.Context, refs []string) (map[string]string, error) {
 	var resp api.ResolveResponse
-	body, err := c.post(ctx, "/v1/resolve", api.ResolveRequest{Refs: refs})
+	body, err := c.post(ctx, "/v1/resolve", api.ResolveRequest{Refs: refs, Account: c.account})
 	if err != nil {
 		return nil, err
 	}
@@ -154,7 +166,7 @@ func (c *Client) Resolve(ctx context.Context, refs []string) (map[string]string,
 
 // Item returns the JSON representation of a whole item.
 func (c *Client) Item(ctx context.Context, vault, item string) ([]byte, error) {
-	return c.post(ctx, "/v1/item", api.ItemRequest{Vault: vault, Item: item})
+	return c.post(ctx, "/v1/item", api.ItemRequest{Vault: vault, Item: item, Account: c.account})
 }
 
 func (c *Client) post(ctx context.Context, path string, reqBody any) ([]byte, error) {
@@ -186,7 +198,14 @@ func (c *Client) post(ctx context.Context, path string, reqBody any) ([]byte, er
 		if json.Unmarshal(body, &eb) != nil || eb.Error.Code == "" {
 			return nil, fmt.Errorf("server returned %s", resp.Status)
 		}
-		return nil, &Error{Status: resp.StatusCode, Code: eb.Error.Code, Refs: eb.Error.Refs}
+		e := &Error{Status: resp.StatusCode, Code: eb.Error.Code, Refs: eb.Error.Refs}
+		// The server answers an unknown alias with a generic bad request,
+		// and servers without multi-account support reject the account
+		// field the same way. Bad references are reported with Refs.
+		if e.Code == api.CodeBadRequest && len(e.Refs) == 0 && c.account != "" {
+			e.Hint = fmt.Sprintf("unknown account alias %q, or the broker predates multi-account support", c.account)
+		}
+		return nil, e
 	}
 	return body, nil
 }

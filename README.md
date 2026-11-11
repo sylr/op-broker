@@ -75,7 +75,7 @@ source <(opb completion zsh)
 ```
 
 Completions cover commands and flags, and come from the configuration file
-for contexts, servers, brokers and bundles. References (`opb read`), vaults
+for contexts, servers, brokers, accounts and bundles. References (`opb read`), vaults
 and items (`opb item get`) are those used by bundles: the broker has no
 listing API.
 
@@ -87,8 +87,16 @@ listing API.
    mkdir -m 700 -p ~/Library/Application\ Support/op-broker
    cp config.example.yaml ~/Library/Application\ Support/op-broker/config.yaml
    chmod 600 ~/Library/Application\ Support/op-broker/config.yaml
-   op account list    # put the account UUID in op.account
+   op account list                               # sign-in addresses (the ID shown is your user ID)
+   op account get --account my.1password.com    # the account ID: put it in op.accounts
    ```
+
+   `op.accounts` maps an alias of your choice (lowercase letters, digits,
+   `_` and `-`) to each account UUID, and `op.default_account` names the
+   account used when a request or rule names none. It is required with more
+   than one account. A single account, the default, can also be set with
+   `op.account: <uuid>`, as in older configurations. Its alias is then
+   `default`. Account changes need a restart.
 
 2. Join the tailnet once, interactively, **as yourself**. The broker must be
    an untagged node owned by your user, because that is how clients
@@ -188,12 +196,14 @@ current_context: home
 contexts:
   home:
     server: http://op-broker.<tailnet>.ts.net
+    account: personal      # optional: account alias on this broker
   work:
     server: http://op-broker.<other-tailnet>.ts.net
     broker: tag:op-broker
 bundles:
   aws-prod:
     context: work          # optional: always use this context
+    account: prod          # optional: always use this account
     env:
     - name: AWS_ACCESS_KEY_ID
       ref: op://<vault>/aws-prod/access key id
@@ -218,6 +228,23 @@ bundles:
   `OPB_ALLOW_NON_TAILNET` are ignored, and `--server`, `--broker`,
   `--allow-non-tailnet` or a different `--context` are errors, as is
   combining bundles pinned to different contexts.
+- **Accounts.** A broker can serve several 1Password accounts, named by the
+  aliases of its `op.accounts`. The account is the bundle's `account`, then
+  `--account`, then `$OPB_ACCOUNT`, then the context's `account`, and
+  otherwise the broker's default account. A bundle with an `account` always
+  uses it: a different `--account` is an error, as is combining bundles
+  pinned to different accounts. Like `broker`, a context's `account` only
+  applies to its own server, and `$OPB_ACCOUNT` is ignored for bundles pinned
+  to a context. One command reads from one account: references have no
+  account part, so a template or env file resolves entirely in the selected
+  account. A bundle's `account` only covers the bundle's own references: if
+  `opb run` uses bundles pinned to an account, any other variable whose value
+  is a reference (from the shell environment or an `--env-file`) is an
+  error that names those variables, since it was written for another
+  account. Choose the account with `--account`, `$OPB_ACCOUNT` or the
+  context instead to read everything from it. An unknown alias is rejected
+  by the broker as an invalid request; `opb` adds that the alias may be
+  unknown or the broker may predate multi-account support.
 
 ## Usage
 
@@ -236,6 +263,8 @@ opb context show [name]                       # effective server and broker iden
 opb context use work
 
 opb item get postgres --vault Dev             # whole item as JSON (needs an items grant)
+
+opb --account personal read op://Private/wifi/password   # another account of the broker
 ```
 
 Exit status: `0` success, `1` error, `2` access denied, `3` 1Password locked,
@@ -254,6 +283,11 @@ Everything not granted is denied. See [`config.example.yaml`](config.example.yam
 - The principals of a rule are ORed together.
 - `read` patterns grant field reads. `items` patterns grant whole-item JSON,
   and are never implied by `read`.
+- `accounts` lists the account aliases a rule applies to. A rule **without
+  `accounts` applies to the default account only**, not to every account:
+  every account has a `Private` vault, and a grant on `op://Private/**` must
+  not silently extend to another account's. The broker passes `op` the
+  account UUID from its own configuration, never anything from the client.
 - Matching is case-insensitive, like `op`. `*` matches one segment and a final
   `**` matches the rest.
 - A field grant covers every attribute of the field. A grant on a one-time
@@ -270,6 +304,8 @@ Everything not granted is denied. See [`config.example.yaml`](config.example.yam
 - The configuration file must be owned by you, mode `0600`, not a symlink, and
   in a directory that only you can write to. Otherwise `opbd` refuses to start
   or reload.
+- Rules are checked against the configured accounts: a rule naming an
+  unknown alias is an error.
 
 Reload rules without restarting:
 
@@ -280,7 +316,9 @@ launchctl kill HUP gui/$(id -u)/com.sylr.op-broker
 A reload applies to new requests. Requests already being handled finish
 under the rules they started with. If the new file is invalid, for example
 because it has a second YAML document, `opbd` logs an error and keeps the
-previous rules.
+previous rules. Accounts only change on restart: if the reloaded file's
+`op.accounts` or `op.default_account` differ from the running ones, the
+reload is rejected the same way.
 
 ## Trust boundary
 
@@ -308,8 +346,8 @@ previous rules.
 ## Audit log
 
 Each request produces one JSON line in `log_file`. It records caller login,
-node ID and name, tags, operation, canonical refs, decision, error code and
-duration. It never records values. To rotate, move the file and send `SIGHUP`
+node ID and name, tags, operation, account alias, canonical refs, decision,
+error code and duration. It never records values. To rotate, move the file and send `SIGHUP`
 to reopen it:
 
 ```sh

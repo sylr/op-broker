@@ -182,6 +182,21 @@ func EnvRefs(env []string) []string {
 	return refs
 }
 
+// ForeignRefs returns, sorted, the names of the variables of env whose value
+// is a secret reference but which were not set by bundle: they come from the
+// process environment or an env file.
+func ForeignRefs(env []string, bundle []EnvVar) []string {
+	var names []string
+	for _, kv := range env {
+		k, v, _ := strings.Cut(kv, "=")
+		if strings.HasPrefix(v, "op://") && !slices.ContainsFunc(bundle, func(e EnvVar) bool { return e.Key == k }) {
+			names = append(names, k)
+		}
+	}
+	slices.Sort(names)
+	return names
+}
+
 // SubstituteEnv replaces whole-value references in env with their values.
 func SubstituteEnv(env []string, values map[string]string) ([]string, error) {
 	out := make([]string, len(env))

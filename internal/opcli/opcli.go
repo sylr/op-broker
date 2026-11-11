@@ -31,12 +31,13 @@ const (
 	MaxWaiting = 32
 )
 
-// Runner resolves secrets.
+// Runner resolves secrets. account is the UUID of the 1Password account to
+// read from, as configured: never a value supplied by a client.
 type Runner interface {
 	// Read returns the value of a field.
-	Read(ctx context.Context, r ref.Ref) ([]byte, error)
+	Read(ctx context.Context, account string, r ref.Ref) ([]byte, error)
 	// ItemGet returns the JSON representation of a whole item.
-	ItemGet(ctx context.Context, vault, item string) ([]byte, error)
+	ItemGet(ctx context.Context, account, vault, item string) ([]byte, error)
 }
 
 // Error is returned by Exec for every failure. It only carries a code: the
@@ -47,10 +48,9 @@ type Error struct {
 
 func (e *Error) Error() string { return "op: " + string(e.Code) }
 
-// Exec runs the op binary.
+// Exec runs the op binary. Calls for every account share one queue.
 type Exec struct {
 	path    string
-	account string
 	timeout time.Duration
 	env     []string
 
@@ -58,12 +58,11 @@ type Exec struct {
 	waiting atomic.Int32
 }
 
-// NewExec returns a runner using the op binary at path, pinned to account.
-// Each invocation is limited to timeout.
-func NewExec(path, account string, timeout time.Duration) *Exec {
+// NewExec returns a runner using the op binary at path. Each invocation is
+// limited to timeout.
+func NewExec(path string, timeout time.Duration) *Exec {
 	return &Exec{
 		path:    path,
-		account: account,
 		timeout: timeout,
 		env:     BuildEnv(os.Getenv),
 		sem:     make(chan struct{}, 1),
@@ -87,13 +86,19 @@ func BuildEnv(getenv func(string) string) []string {
 }
 
 // Read implements Runner.
-func (e *Exec) Read(ctx context.Context, r ref.Ref) ([]byte, error) {
-	return e.run(ctx, []string{r.String(), r.Vault + "/" + r.Item}, "read", "--account="+e.account, "--no-newline", "--", r.String())
+func (e *Exec) Read(ctx context.Context, account string, r ref.Ref) ([]byte, error) {
+	if account == "" {
+		return nil, &Error{Code: api.CodeInternal}
+	}
+	return e.run(ctx, []string{r.String(), r.Vault + "/" + r.Item}, "read", "--account="+account, "--no-newline", "--", r.String())
 }
 
 // ItemGet implements Runner.
-func (e *Exec) ItemGet(ctx context.Context, vault, item string) ([]byte, error) {
-	return e.run(ctx, []string{vault + "/" + item}, "item", "get", "--account="+e.account, "--vault="+vault, "--format=json", "--", item)
+func (e *Exec) ItemGet(ctx context.Context, account, vault, item string) ([]byte, error) {
+	if account == "" {
+		return nil, &Error{Code: api.CodeInternal}
+	}
+	return e.run(ctx, []string{vault + "/" + item}, "item", "get", "--account="+account, "--vault="+vault, "--format=json", "--", item)
 }
 
 // run executes op with args. names are strings chosen by the caller that op

@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"maps"
 	"net/http"
 	"net/http/httptest"
 	"slices"
@@ -22,6 +23,14 @@ import (
 )
 
 const sentinel = "SENTINEL-s3cr3t-9f2c"
+
+// Account UUIDs of the test accounts. work is the default.
+const (
+	workUUID     = "WORKWORKWORKWORKWORKWORKWO"
+	personalUUID = "PERSONALPERSONALPERSONALPE"
+)
+
+var testAccounts = map[string]string{"work": workUUID, "personal": personalUUID}
 
 var (
 	laptop = policy.Identity{LoginName: "sylvain@formance.com", StableID: "nLAPTOP", NodeName: "laptop"}
@@ -46,12 +55,15 @@ type fakeRunner struct {
 	errs   map[string]api.Code // canonical ref -> error
 	items  map[string]string   // vault/item -> JSON
 	calls  []string
+	// accounts holds the account UUID of each call.
+	accounts []string
 }
 
-func (f *fakeRunner) Read(_ context.Context, r ref.Ref) ([]byte, error) {
+func (f *fakeRunner) Read(_ context.Context, account string, r ref.Ref) ([]byte, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.calls = append(f.calls, r.String())
+	f.accounts = append(f.accounts, account)
 	if code, ok := f.errs[r.String()]; ok {
 		return nil, &opcli.Error{Code: code}
 	}
@@ -62,10 +74,11 @@ func (f *fakeRunner) Read(_ context.Context, r ref.Ref) ([]byte, error) {
 	return []byte(v), nil
 }
 
-func (f *fakeRunner) ItemGet(_ context.Context, vault, item string) ([]byte, error) {
+func (f *fakeRunner) ItemGet(_ context.Context, account, vault, item string) ([]byte, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.calls = append(f.calls, "item:"+vault+"/"+item)
+	f.accounts = append(f.accounts, account)
 	v, ok := f.items[vault+"/"+item]
 	if !ok {
 		return nil, &opcli.Error{Code: api.CodeNotFound}
@@ -81,13 +94,10 @@ type harness struct {
 
 func newHarness(t *testing.T) *harness {
 	t.Helper()
-	pol, err := policy.Compile([]policy.Rule{
-		{Principals: []string{"user:sylvain@formance.com"}, Read: []string{"op://Dev/**"}, Items: []string{"op://Dev/postgres"}},
-		{Principals: []string{"tag:ci"}, Read: []string{"op://CI/deploy/token"}},
-	})
-	if err != nil {
-		t.Fatal(err)
-	}
+	pol := mustPolicy(t,
+		policy.Rule{Principals: []string{"user:sylvain@formance.com"}, Read: []string{"op://Dev/**"}, Items: []string{"op://Dev/postgres"}},
+		policy.Rule{Principals: []string{"tag:ci"}, Read: []string{"op://CI/deploy/token"}},
+	)
 	runner := &fakeRunner{
 		values: map[string]string{
 			"op://Dev/postgres/password":                sentinel,
@@ -115,6 +125,8 @@ func newHarness(t *testing.T) *harness {
 		}},
 		Policy:         pol,
 		Runner:         runner,
+		Accounts:       testAccounts,
+		DefaultAccount: "work",
 		Logger:         slog.New(slog.NewJSONHandler(logs, nil)),
 		Hosts:          []string{"op-broker", "op-broker.tail1234.ts.net", "100.100.1.1"},
 		RequestTimeout: 5 * time.Second,
@@ -427,7 +439,7 @@ func TestSetPolicy(t *testing.T) {
 
 func mustPolicy(t *testing.T, rules ...policy.Rule) *policy.Policy {
 	t.Helper()
-	p, err := policy.Compile(rules)
+	p, err := policy.Compile(rules, slices.Collect(maps.Keys(testAccounts)), "work")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -436,12 +448,12 @@ func mustPolicy(t *testing.T, rules ...policy.Rule) *policy.Policy {
 
 type sizedRunner struct{ size int }
 
-func (r sizedRunner) Read(context.Context, ref.Ref) ([]byte, error) {
+func (r sizedRunner) Read(context.Context, string, ref.Ref) ([]byte, error) {
 	// Control characters expand 6x when JSON-encoded.
 	return bytes.Repeat([]byte{0x01}, r.size), nil
 }
 
-func (sizedRunner) ItemGet(context.Context, string, string) ([]byte, error) {
+func (sizedRunner) ItemGet(context.Context, string, string, string) ([]byte, error) {
 	return nil, &opcli.Error{Code: api.CodeNotFound}
 }
 
@@ -492,5 +504,97 @@ func TestInflightLimit(t *testing.T) {
 	}
 	if rec := h.do(t, "GET", "/healthz", ""); rec.Code != http.StatusOK {
 		t.Fatalf("healthz blocked by API limit: %d", rec.Code)
+	}
+}
+
+func resolveBodyIn(account string, refs ...string) string {
+	b, _ := json.Marshal(api.ResolveRequest{Refs: refs, Account: account})
+	return string(b)
+}
+
+func TestResolveDefaultAccount(t *testing.T) {
+	h := newHarness(t)
+	for _, body := range []string{
+		resolveBody("op://Dev/postgres/user"),
+		resolveBodyIn("work", "op://Dev/postgres/user"),
+		`{"refs":["op://Dev/postgres/user"],"account":""}`,
+	} {
+		decodeValues(t, h.do(t, "POST", "/v1/resolve", body))
+	}
+	if want := []string{workUUID, workUUID, workUUID}; !slices.Equal(h.runner.accounts, want) {
+		t.Fatalf("accounts = %v, want %v", h.runner.accounts, want)
+	}
+	if !strings.Contains(h.logs.String(), `"account":"work"`) {
+		t.Fatalf("account missing from audit log:\n%s", h.logs)
+	}
+}
+
+func TestResolveOtherAccount(t *testing.T) {
+	h := newHarness(t)
+	// Rules without accounts cover the default account only, although the
+	// same vault name exists in the other one.
+	rec := h.do(t, "POST", "/v1/resolve", resolveBodyIn("personal", "op://Dev/postgres/user"))
+	if rec.Code != http.StatusForbidden || decodeError(t, rec).Code != api.CodeDenied {
+		t.Fatalf("status = %d, body = %s", rec.Code, rec.Body)
+	}
+	if len(h.runner.calls) != 0 {
+		t.Fatalf("runner called: %v", h.runner.calls)
+	}
+	if !strings.Contains(h.logs.String(), `"account":"personal","refs":["op://Dev/postgres/user"],"decision":"deny"`) {
+		t.Fatalf("missing deny audit entry:\n%s", h.logs)
+	}
+
+	h.srv.SetPolicy(mustPolicy(t, policy.Rule{Principals: []string{"user:sylvain@formance.com"}, Accounts: []string{"personal"}, Read: []string{"op://Dev/**"}}))
+	decodeValues(t, h.do(t, "POST", "/v1/resolve", resolveBodyIn("personal", "op://Dev/postgres/user")))
+	if want := []string{personalUUID}; !slices.Equal(h.runner.accounts, want) {
+		t.Fatalf("accounts = %v, want %v", h.runner.accounts, want)
+	}
+	// The grant does not extend to the default account.
+	if rec := h.do(t, "POST", "/v1/resolve", resolveBody("op://Dev/postgres/user")); rec.Code != http.StatusForbidden {
+		t.Fatalf("default account: status = %d", rec.Code)
+	}
+}
+
+func TestUnknownAccount(t *testing.T) {
+	for _, account := range []string{"home", "WORK", workUUID, "work ", "../work"} {
+		h := newHarness(t)
+		for path, body := range map[string]string{
+			"/v1/resolve": resolveBodyIn(account, "op://Dev/postgres/user"),
+			"/v1/item":    itemBodyIn(account, "Dev", "postgres"),
+		} {
+			rec := h.do(t, "POST", path, body)
+			if rec.Code != http.StatusBadRequest || decodeError(t, rec).Code != api.CodeBadRequest {
+				t.Errorf("%s %q: status = %d, body = %s", path, account, rec.Code, rec.Body)
+			}
+			for alias := range testAccounts {
+				if strings.Contains(rec.Body.String(), alias) {
+					t.Errorf("%s %q: response reveals account %q: %s", path, account, alias, rec.Body)
+				}
+			}
+		}
+		if len(h.runner.calls) != 0 {
+			t.Fatalf("%q: runner called: %v", account, h.runner.calls)
+		}
+	}
+}
+
+func itemBodyIn(account, vault, item string) string {
+	b, _ := json.Marshal(api.ItemRequest{Vault: vault, Item: item, Account: account})
+	return string(b)
+}
+
+func TestItemAccount(t *testing.T) {
+	h := newHarness(t)
+	if rec := h.do(t, "POST", "/v1/item", itemBodyIn("personal", "Dev", "postgres")); rec.Code != http.StatusForbidden {
+		t.Fatalf("personal without grant: status = %d", rec.Code)
+	}
+	h.srv.SetPolicy(mustPolicy(t, policy.Rule{Principals: []string{"user:sylvain@formance.com"}, Accounts: []string{"work", "personal"}, Items: []string{"op://Dev/postgres"}}))
+	for _, account := range []string{"", "personal"} {
+		if rec := h.do(t, "POST", "/v1/item", itemBodyIn(account, "Dev", "postgres")); rec.Code != http.StatusOK {
+			t.Fatalf("%q: status = %d, body = %s", account, rec.Code, rec.Body)
+		}
+	}
+	if want := []string{workUUID, personalUUID}; !slices.Equal(h.runner.accounts, want) {
+		t.Fatalf("accounts = %v, want %v", h.runner.accounts, want)
 	}
 }
