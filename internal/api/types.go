@@ -2,7 +2,10 @@
 // client.
 package api
 
-import "net/http"
+import (
+	"net/http"
+	"regexp"
+)
 
 // MaxRefs is the maximum number of refs accepted in one resolve request.
 const MaxRefs = 100
@@ -18,9 +21,20 @@ const MaxValueBytes = 8 << 20
 // refuse larger responses; servers never send them.
 const MaxResponseBytes = 16 << 20
 
+// accountAlias is the syntax of account aliases.
+var accountAlias = regexp.MustCompile(`^[a-z0-9][a-z0-9_-]{0,31}$`)
+
+// ValidAccount reports whether s is a well-formed account alias. Aliases are
+// names given to 1Password accounts in the opbd configuration; clients only
+// ever send aliases, never account IDs.
+func ValidAccount(s string) bool { return accountAlias.MatchString(s) }
+
 // ResolveRequest is the body of POST /v1/resolve.
 type ResolveRequest struct {
 	Refs []string `json:"refs"`
+	// Account is the alias of the account to read from. Empty means the
+	// server's default account.
+	Account string `json:"account,omitempty"`
 }
 
 // ResolveResponse maps each ref, as sent by the client, to its value.
@@ -32,6 +46,8 @@ type ResolveResponse struct {
 type ItemRequest struct {
 	Vault string `json:"vault"`
 	Item  string `json:"item"`
+	// Account is as in ResolveRequest.
+	Account string `json:"account,omitempty"`
 }
 
 // ErrorBody is the body of every non-2xx response.

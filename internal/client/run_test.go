@@ -120,3 +120,18 @@ func TestLookPathUsesFinalEnv(t *testing.T) {
 		t.Fatalf("LookPath(absolute) = %q, %v", got, err)
 	}
 }
+
+func TestForeignRefs(t *testing.T) {
+	bundle := []EnvVar{{Key: "B", Value: "op://V/i/b"}, {Key: "OVERRIDDEN", Value: "op://V/i/o"}}
+	env := MergeEnv(
+		[]string{"HOME=/h", "AMBIENT=op://Private/github/token", "OVERRIDDEN=op://Private/x/y"},
+		[]EnvVar{{Key: "FROM_FILE", Value: "op://Private/db/password"}, {Key: "PLAIN", Value: "x"}},
+		bundle,
+	)
+	if got, want := ForeignRefs(env, bundle), []string{"AMBIENT", "FROM_FILE"}; !slices.Equal(got, want) {
+		t.Fatalf("ForeignRefs = %q, want %q", got, want)
+	}
+	if got := ForeignRefs(MergeEnv(nil, bundle), bundle); got != nil {
+		t.Fatalf("bundle-only env: %q", got)
+	}
+}

@@ -1,6 +1,7 @@
 package main
 
 import (
+	"cmp"
 	"maps"
 	"slices"
 	"strings"
@@ -90,18 +91,40 @@ func (g *globals) completeBrokers(_ *cobra.Command, _ []string, toComplete strin
 	return comps, cobra.ShellCompDirectiveNoFileComp | cobra.ShellCompDirectiveNoSpace
 }
 
+// completeAccounts completes the account aliases used by contexts and
+// bundles: the server has no listing API.
+func (g *globals) completeAccounts(_ *cobra.Command, _ []string, toComplete string) ([]cobra.Completion, cobra.ShellCompDirective) {
+	var accounts []string
+	if cfg := g.completionConfig(); cfg != nil {
+		for _, c := range cfg.Contexts {
+			accounts = append(accounts, c.Account)
+		}
+		for _, b := range cfg.Bundles {
+			accounts = append(accounts, b.Account)
+		}
+	}
+	var comps []cobra.Completion
+	for _, a := range slices.Compact(slices.Sorted(slices.Values(accounts))) {
+		if a != "" && strings.HasPrefix(a, toComplete) {
+			comps = append(comps, a)
+		}
+	}
+	return comps, cobra.ShellCompDirectiveNoFileComp
+}
+
 // completeBundles completes bundle names not in chosen. Once a chosen bundle
-// pins a context, bundles pinned to another context are left out, since they
-// cannot be combined.
+// pins a context or an account, bundles pinned to another one are left out,
+// since they cannot be combined.
 func (g *globals) completeBundles(chosen []string, toComplete string) ([]cobra.Completion, cobra.ShellCompDirective) {
 	cfg := g.completionConfig()
 	if cfg == nil {
 		return nil, cobra.ShellCompDirectiveNoFileComp
 	}
-	var pin string
+	var pin client.Pin
 	for _, name := range chosen {
-		if b, ok := cfg.Bundles[name]; ok && b.Context != "" {
-			pin = b.Context
+		if b, ok := cfg.Bundles[name]; ok {
+			pin.Context = cmp.Or(b.Context, pin.Context)
+			pin.Account = cmp.Or(b.Account, pin.Account)
 		}
 	}
 	var comps []cobra.Completion
@@ -110,7 +133,8 @@ func (g *globals) completeBundles(chosen []string, toComplete string) ([]cobra.C
 		if slices.Contains(chosen, name) || !strings.HasPrefix(name, toComplete) {
 			continue
 		}
-		if pin != "" && b.Context != "" && b.Context != pin {
+		if pin.Context != "" && b.Context != "" && b.Context != pin.Context ||
+			pin.Account != "" && b.Account != "" && b.Account != pin.Account {
 			continue
 		}
 		var vars []string
@@ -118,8 +142,15 @@ func (g *globals) completeBundles(chosen []string, toComplete string) ([]cobra.C
 			vars = append(vars, e.Name)
 		}
 		desc := strings.Join(vars, ", ")
+		var pins []string
 		if b.Context != "" {
-			desc = "[" + b.Context + "] " + desc
+			pins = append(pins, b.Context)
+		}
+		if b.Account != "" {
+			pins = append(pins, "account "+b.Account)
+		}
+		if len(pins) > 0 {
+			desc = "[" + strings.Join(pins, ", ") + "] " + desc
 		}
 		comps = append(comps, cobra.CompletionWithDesc(name, desc))
 	}

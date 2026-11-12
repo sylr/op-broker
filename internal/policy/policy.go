@@ -1,8 +1,10 @@
 // Package policy decides which tailnet callers may read which secrets.
 //
 // A rule grants its read and items patterns to any of its principals (the
-// principals of a rule are ORed). Anything not granted by some rule is
-// denied.
+// principals of a rule are ORed), in the accounts it lists. A rule that lists
+// no accounts applies to the default account only, never to all of them:
+// the same vault name (e.g. "Private") exists in every account. Anything not
+// granted by some rule is denied.
 package policy
 
 import (
@@ -29,8 +31,11 @@ func (id Identity) Tagged() bool { return len(id.Tags) > 0 }
 // Rule is a policy rule as written in the configuration file.
 type Rule struct {
 	Principals []string `yaml:"principals"`
-	Read       []string `yaml:"read"`
-	Items      []string `yaml:"items"`
+	// Accounts lists the aliases of the accounts the rule applies to. Empty
+	// means the default account only.
+	Accounts []string `yaml:"accounts"`
+	Read     []string `yaml:"read"`
+	Items    []string `yaml:"items"`
 }
 
 // Policy is a compiled, validated set of rules.
@@ -53,6 +58,7 @@ type principal struct {
 
 type rule struct {
 	principals []principal
+	accounts   []string
 	read       []pattern
 	items      []pattern
 }
@@ -61,9 +67,14 @@ type rule struct {
 // "**" matches one or more remaining segments.
 type pattern []string
 
-// Compile validates rules and returns the policy. Any invalid principal or
-// pattern is an error.
-func Compile(rules []Rule) (*Policy, error) {
+// Compile validates rules and returns the policy. accounts are the aliases
+// of the configured accounts, and defaultAccount the one rules without
+// accounts apply to. Any invalid principal or pattern, or unknown account,
+// is an error.
+func Compile(rules []Rule, accounts []string, defaultAccount string) (*Policy, error) {
+	if !slices.Contains(accounts, defaultAccount) {
+		return nil, fmt.Errorf("unknown default account %q", defaultAccount)
+	}
 	p := &Policy{}
 	for i, r := range rules {
 		var cr rule
@@ -72,6 +83,15 @@ func Compile(rules []Rule) (*Policy, error) {
 		}
 		if len(r.Read) == 0 && len(r.Items) == 0 {
 			return nil, fmt.Errorf("rule %d: no read or items patterns", i)
+		}
+		for _, a := range r.Accounts {
+			if !slices.Contains(accounts, a) {
+				return nil, fmt.Errorf("rule %d: unknown account %q", i, a)
+			}
+		}
+		cr.accounts = slices.Clone(r.Accounts)
+		if len(cr.accounts) == 0 {
+			cr.accounts = []string{defaultAccount}
 		}
 		for _, s := range r.Principals {
 			pr, err := parsePrincipal(s)
@@ -99,29 +119,35 @@ func Compile(rules []Rule) (*Policy, error) {
 	return p, nil
 }
 
-// AllowField reports whether id may read the field referenced by r. The query
-// part of the reference is not considered: a grant covers every attribute of
-// a field.
-func (p *Policy) AllowField(id Identity, r ref.Ref) bool {
+// AllowField reports whether id may read the field referenced by r in the
+// account with alias account. The query part of the reference is not
+// considered: a grant covers every attribute of a field.
+func (p *Policy) AllowField(id Identity, account string, r ref.Ref) bool {
 	segs := r.Segments()
 	for _, cr := range p.rules {
-		if cr.matchesIdentity(id) && slices.ContainsFunc(cr.read, func(pat pattern) bool { return pat.match(segs) }) {
+		if cr.matches(id, account) && slices.ContainsFunc(cr.read, func(pat pattern) bool { return pat.match(segs) }) {
 			return true
 		}
 	}
 	return false
 }
 
-// AllowItem reports whether id may read the whole item. Only items patterns
-// are considered: field grants never imply item access.
-func (p *Policy) AllowItem(id Identity, vault, item string) bool {
+// AllowItem reports whether id may read the whole item in the account with
+// alias account. Only items patterns are considered: field grants never
+// imply item access.
+func (p *Policy) AllowItem(id Identity, account, vault, item string) bool {
 	segs := []string{vault, item}
 	for _, cr := range p.rules {
-		if cr.matchesIdentity(id) && slices.ContainsFunc(cr.items, func(pat pattern) bool { return pat.match(segs) }) {
+		if cr.matches(id, account) && slices.ContainsFunc(cr.items, func(pat pattern) bool { return pat.match(segs) }) {
 			return true
 		}
 	}
 	return false
+}
+
+// matches reports whether the rule applies to id in account.
+func (r rule) matches(id Identity, account string) bool {
+	return slices.Contains(r.accounts, account) && r.matchesIdentity(id)
 }
 
 func (r rule) matchesIdentity(id Identity) bool {

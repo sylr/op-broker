@@ -14,9 +14,13 @@ var (
 	renamedEve = Identity{LoginName: "eve@example.com", StableID: "nEVE", NodeName: "devbox"}
 )
 
+// accounts are the account aliases the tests compile against; work is the
+// default.
+var accounts = []string{"work", "personal"}
+
 func mustCompile(t *testing.T, rules []Rule) *Policy {
 	t.Helper()
-	p, err := Compile(rules)
+	p, err := Compile(rules, accounts, "work")
 	if err != nil {
 		t.Fatalf("Compile: %v", err)
 	}
@@ -63,7 +67,7 @@ func TestAllowField(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			if got := p.AllowField(tt.id, mustRef(t, tt.ref)); got != tt.want {
+			if got := p.AllowField(tt.id, "work", mustRef(t, tt.ref)); got != tt.want {
 				t.Fatalf("AllowField(%+v, %s) = %v, want %v", tt.id, tt.ref, got, tt.want)
 			}
 		})
@@ -89,7 +93,7 @@ func TestAllowItem(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			if got := p.AllowItem(tt.id, tt.vault, tt.item); got != tt.want {
+			if got := p.AllowItem(tt.id, "work", tt.vault, tt.item); got != tt.want {
 				t.Fatalf("AllowItem(%s/%s) = %v, want %v", tt.vault, tt.item, got, tt.want)
 			}
 		})
@@ -98,10 +102,10 @@ func TestAllowItem(t *testing.T) {
 
 func TestDefaultDeny(t *testing.T) {
 	p := mustCompile(t, nil)
-	if p.AllowField(sylvain, mustRef(t, "op://Dev/postgres/password")) {
+	if p.AllowField(sylvain, "work", mustRef(t, "op://Dev/postgres/password")) {
 		t.Fatal("empty policy allowed a field read")
 	}
-	if p.AllowItem(sylvain, "Dev", "postgres") {
+	if p.AllowItem(sylvain, "work", "Dev", "postgres") {
 		t.Fatal("empty policy allowed an item read")
 	}
 }
@@ -125,12 +129,61 @@ func TestCompileErrors(t *testing.T) {
 		{"partial glob", Rule{Principals: []string{"user:a@b"}, Read: []string{"op://Dev/post*/f"}}},
 		{"item pattern too long", Rule{Principals: []string{"user:a@b"}, Items: []string{"op://Dev/item/field"}}},
 		{"item pattern double star", Rule{Principals: []string{"user:a@b"}, Items: []string{"op://Dev/**"}}},
+		{"unknown account", Rule{Principals: []string{"user:a@b"}, Accounts: []string{"other"}, Read: []string{"op://Dev/**"}}},
+		{"empty account", Rule{Principals: []string{"user:a@b"}, Accounts: []string{""}, Read: []string{"op://Dev/**"}}},
+		{"account UUID instead of alias", Rule{Principals: []string{"user:a@b"}, Accounts: []string{"ABCDEFGHIJKLMNOPQRSTUVWXYZ"}, Read: []string{"op://Dev/**"}}},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			if _, err := Compile([]Rule{tt.rule}); err == nil {
+			if _, err := Compile([]Rule{tt.rule}, accounts, "work"); err == nil {
 				t.Fatalf("Compile(%+v) succeeded, want error", tt.rule)
 			}
 		})
+	}
+}
+
+func TestCompileUnknownDefaultAccount(t *testing.T) {
+	if _, err := Compile(nil, accounts, "other"); err == nil {
+		t.Fatal("Compile accepted an unknown default account")
+	}
+}
+
+func TestAccounts(t *testing.T) {
+	p := mustCompile(t, []Rule{
+		// No accounts: the default account only, although the same vault
+		// exists in every account.
+		{Principals: []string{"user:sylvain@formance.com"}, Read: []string{"op://Private/**"}, Items: []string{"op://Private/*"}},
+		{Principals: []string{"user:sylvain@formance.com"}, Accounts: []string{"personal"}, Read: []string{"op://Home/**"}, Items: []string{"op://Home/*"}},
+		{Principals: []string{"tag:ci"}, Accounts: []string{"work", "personal"}, Read: []string{"op://CI/**"}},
+	})
+	tests := []struct {
+		name    string
+		id      Identity
+		account string
+		ref     string
+		want    bool
+	}{
+		{"rule without accounts in default", sylvain, "work", "op://Private/a/b", true},
+		{"rule without accounts not in other account", sylvain, "personal", "op://Private/a/b", false},
+		{"rule with accounts in listed account", sylvain, "personal", "op://Home/a/b", true},
+		{"rule with accounts not in default", sylvain, "work", "op://Home/a/b", false},
+		{"rule with several accounts, first", ciByOwner, "work", "op://CI/a/b", true},
+		{"rule with several accounts, second", ciByOwner, "personal", "op://CI/a/b", true},
+		{"unknown account", sylvain, "other", "op://Private/a/b", false},
+		{"empty account", sylvain, "", "op://Private/a/b", false},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := p.AllowField(tt.id, tt.account, mustRef(t, tt.ref)); got != tt.want {
+				t.Fatalf("AllowField(%s, %s) = %v, want %v", tt.account, tt.ref, got, tt.want)
+			}
+		})
+	}
+
+	if !p.AllowItem(sylvain, "work", "Private", "x") || p.AllowItem(sylvain, "personal", "Private", "x") {
+		t.Error("items: rule without accounts must cover the default account only")
+	}
+	if !p.AllowItem(sylvain, "personal", "Home", "x") || p.AllowItem(sylvain, "work", "Home", "x") {
+		t.Error("items: rule with accounts must cover those accounts only")
 	}
 }

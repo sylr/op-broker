@@ -39,7 +39,7 @@ func newFake(t *testing.T, timeout time.Duration) (*Exec, string) {
 	if err := os.WriteFile(path, []byte(script), 0o700); err != nil {
 		t.Fatal(err)
 	}
-	return NewExec(path, "ACCOUNT123", timeout), logFile
+	return NewExec(path, timeout), logFile
 }
 
 func read(t *testing.T, e *Exec, s string) ([]byte, error) {
@@ -48,7 +48,7 @@ func read(t *testing.T, e *Exec, s string) ([]byte, error) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	return e.Read(context.Background(), r)
+	return e.Read(context.Background(), "ACCOUNT123", r)
 }
 
 func code(t *testing.T, err error) api.Code {
@@ -85,13 +85,61 @@ func TestReadArgs(t *testing.T) {
 
 func TestItemGetArgs(t *testing.T) {
 	e, _ := newFake(t, 5*time.Second)
-	out, err := e.ItemGet(context.Background(), "Dev", "item")
+	out, err := e.ItemGet(context.Background(), "ACCOUNT123", "Dev", "item")
 	if err != nil {
 		t.Fatal(err)
 	}
 	want := "item\nget\n--account=ACCOUNT123\n--vault=Dev\n--format=json\n--\nitem\n"
 	if string(out) != want {
 		t.Fatalf("args = %q, want %q", out, want)
+	}
+}
+
+func TestAccountPerCall(t *testing.T) {
+	e, _ := newFake(t, 5*time.Second)
+	r, _ := ref.Parse("op://T/i/args")
+	out, err := e.Read(context.Background(), "OTHERACCOUNT", r)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(out), "\n--account=OTHERACCOUNT\n") {
+		t.Fatalf("args = %q", out)
+	}
+}
+
+func TestEmptyAccountRefused(t *testing.T) {
+	// Without --account, op would use whatever account it defaults to.
+	e, logFile := newFake(t, 5*time.Second)
+	r, _ := ref.Parse("op://T/i/serial")
+	if _, err := e.Read(context.Background(), "", r); code(t, err) != api.CodeInternal {
+		t.Fatalf("Read: got %v", err)
+	}
+	if _, err := e.ItemGet(context.Background(), "", "T", "i"); code(t, err) != api.CodeInternal {
+		t.Fatalf("ItemGet: got %v", err)
+	}
+	if _, err := os.Stat(logFile); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("op was run without an account")
+	}
+}
+
+func TestSerializedAcrossAccounts(t *testing.T) {
+	e, logFile := newFake(t, 5*time.Second)
+	r, _ := ref.Parse("op://T/i/serial")
+	var wg sync.WaitGroup
+	for _, account := range []string{"A", "B", "A", "B"} {
+		wg.Go(func() {
+			if _, err := e.Read(context.Background(), account, r); err != nil {
+				t.Error(err)
+			}
+		})
+	}
+	wg.Wait()
+	b, err := os.ReadFile(logFile)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if want := strings.Repeat("start\nend\n", 4); string(b) != want {
+		t.Fatalf("op invocations overlapped:\n%s", b)
 	}
 }
 
@@ -154,7 +202,7 @@ func TestCancelledContext(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 100*time.Millisecond)
 	defer cancel()
 	start := time.Now()
-	_, err := e.Read(ctx, r)
+	_, err := e.Read(ctx, "ACCOUNT123", r)
 	if code(t, err) != api.CodeTimeout {
 		t.Fatalf("got %v", err)
 	}

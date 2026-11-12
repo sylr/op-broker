@@ -4,10 +4,12 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"net/netip"
 	"slices"
+	"strings"
 	"testing"
 
 	"github.com/sylr/op-broker/internal/api"
@@ -173,5 +175,96 @@ func TestNewAddress(t *testing.T) {
 		if _, err := New(bad, Options{}); err == nil {
 			t.Errorf("New(%q) succeeded", bad)
 		}
+	}
+}
+
+func TestAccount(t *testing.T) {
+	var bodies []string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		b, _ := io.ReadAll(r.Body)
+		bodies = append(bodies, string(b))
+		if r.URL.Path == "/v1/item" {
+			io.WriteString(w, `{}`)
+			return
+		}
+		json.NewEncoder(w).Encode(api.ResolveResponse{Values: map[string]string{"op://a/b/c": "v"}})
+	}))
+	defer srv.Close()
+
+	for _, account := range []string{"", "personal"} {
+		bodies = nil
+		opts := loopback
+		opts.Account = account
+		c, err := New(srv.URL, opts)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if _, err := c.Resolve(context.Background(), []string{"op://a/b/c"}); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := c.Item(context.Background(), "a", "b"); err != nil {
+			t.Fatal(err)
+		}
+		for _, b := range bodies {
+			// Without an account, requests are those older servers accept:
+			// they reject unknown fields.
+			if got := strings.Contains(b, `"account"`); got != (account != "") || account != "" && !strings.Contains(b, `"account":"personal"`) {
+				t.Errorf("account %q: body %s", account, b)
+			}
+		}
+	}
+
+	for _, account := range []string{"Personal", "ABCDEFGHIJKLMNOPQRSTUVWXYZ", "a b", "-x"} {
+		opts := loopback
+		opts.Account = account
+		if _, err := New(srv.URL, opts); err == nil {
+			t.Errorf("account %q accepted", account)
+		}
+	}
+}
+
+func TestBadRequestAccountHint(t *testing.T) {
+	var refs []string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusBadRequest)
+		json.NewEncoder(w).Encode(api.ErrorBody{Error: api.ErrorDetail{Code: api.CodeBadRequest, Message: api.CodeBadRequest.Message(), Refs: refs}})
+	}))
+	defer srv.Close()
+
+	const hint = `unknown account alias "personal", or the broker predates multi-account support`
+	tests := []struct {
+		name     string
+		account  string
+		refs     []string
+		wantHint bool
+	}{
+		{"with account", "personal", nil, true},
+		{"without account", "", nil, false},
+		// Invalid references are reported as such.
+		{"with account and bad refs", "personal", []string{"op://a/b/c"}, false},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			refs = tt.refs
+			opts := loopback
+			opts.Account = tt.account
+			c, err := New(srv.URL, opts)
+			if err != nil {
+				t.Fatal(err)
+			}
+			for _, call := range []func() error{
+				func() error { _, err := c.Resolve(context.Background(), []string{"op://a/b/c"}); return err },
+				func() error { _, err := c.Item(context.Background(), "a", "b"); return err },
+			} {
+				err := call()
+				ce, ok := errors.AsType[*Error](err)
+				if !ok || ce.Code != api.CodeBadRequest || ce.Status != http.StatusBadRequest {
+					t.Fatalf("error = %#v, want a bad_request *Error", err)
+				}
+				if got := strings.Contains(err.Error(), hint); got != tt.wantHint {
+					t.Fatalf("message %q: hint = %v, want %v", err, got, tt.wantHint)
+				}
+			}
+		})
 	}
 }

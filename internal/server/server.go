@@ -3,11 +3,13 @@ package server
 
 import (
 	"bytes"
+	"cmp"
 	"context"
 	"encoding/json"
 	"errors"
 	"io"
 	"log/slog"
+	"maps"
 	"mime"
 	"net"
 	"net/http"
@@ -32,7 +34,12 @@ type Config struct {
 	WhoIs  WhoIser
 	Policy *policy.Policy
 	Runner opcli.Runner
-	Logger *slog.Logger
+	// Accounts maps account aliases to 1Password account UUIDs. Requests
+	// name an alias, or none for DefaultAccount; op is only ever given the
+	// UUIDs configured here.
+	Accounts       map[string]string
+	DefaultAccount string
+	Logger         *slog.Logger
 	// Hosts lists the accepted values of the Host header (names and IPs,
 	// without port). Requests for any other host are rejected.
 	Hosts []string
@@ -45,6 +52,8 @@ type Config struct {
 type Server struct {
 	whois          WhoIser
 	runner         opcli.Runner
+	accounts       map[string]string
+	defaultAccount string
 	log            *slog.Logger
 	hosts          map[string]bool
 	requestTimeout time.Duration
@@ -58,6 +67,8 @@ func New(cfg Config) *Server {
 	s := &Server{
 		whois:          cfg.WhoIs,
 		runner:         cfg.Runner,
+		accounts:       maps.Clone(cfg.Accounts),
+		defaultAccount: cfg.DefaultAccount,
 		log:            cfg.Logger,
 		hosts:          make(map[string]bool),
 		requestTimeout: cfg.RequestTimeout,
@@ -78,6 +89,7 @@ func New(cfg Config) *Server {
 }
 
 // SetPolicy atomically replaces the policy, e.g. on configuration reload.
+// The policy must have been compiled against the server's accounts.
 func (s *Server) SetPolicy(p *policy.Policy) { s.policy.Store(p) }
 
 // ServeHTTP implements http.Handler.
@@ -116,11 +128,12 @@ const MaxInflight = 64
 
 // event accumulates the fields of one audit log entry.
 type event struct {
-	start  time.Time
-	remote string
-	id     policy.Identity
-	op     string
-	refs   []string
+	start   time.Time
+	remote  string
+	id      policy.Identity
+	op      string
+	account string // alias
+	refs    []string
 }
 
 func (s *Server) audit(e *event, decision string, code api.Code) {
@@ -131,6 +144,7 @@ func (s *Server) audit(e *event, decision string, code api.Code) {
 		slog.String("node_id", e.id.StableID),
 		slog.String("node", e.id.NodeName),
 		slog.Any("tags", e.id.Tags),
+		slog.String("account", e.account),
 		slog.Any("refs", e.refs),
 		slog.String("decision", decision),
 		slog.Int64("duration_ms", time.Since(e.start).Milliseconds()),
@@ -168,12 +182,37 @@ func (s *Server) begin(ctx context.Context, w http.ResponseWriter, r *http.Reque
 	return true
 }
 
+// resolveAccount returns the UUID of the account with alias, or of the
+// default account if alias is empty. It returns false if a response has
+// already been written. Unknown aliases are bad requests, whose response
+// does not tell which aliases exist.
+func (s *Server) resolveAccount(w http.ResponseWriter, e *event, alias string) (string, bool) {
+	alias = cmp.Or(alias, s.defaultAccount)
+	uuid, ok := s.accounts[alias]
+	if !ok {
+		// Only well-formed aliases are logged.
+		if api.ValidAccount(alias) {
+			e.account = alias
+		}
+		s.audit(e, "error", api.CodeBadRequest)
+		writeError(w, api.CodeBadRequest, nil)
+		return "", false
+	}
+	// Authorization uses e.account: it must be set to the resolved alias.
+	e.account = alias
+	return uuid, true
+}
+
 func (s *Server) handleResolve(w http.ResponseWriter, r *http.Request) {
 	e := &event{start: time.Now(), op: "read-field"}
 	ctx, cancel := context.WithTimeout(r.Context(), s.requestTimeout)
 	defer cancel()
 	var req api.ResolveRequest
 	if !s.begin(ctx, w, r, e, &req) {
+		return
+	}
+	account, ok := s.resolveAccount(w, e, req.Account)
+	if !ok {
 		return
 	}
 	if len(req.Refs) == 0 || len(req.Refs) > api.MaxRefs {
@@ -215,7 +254,7 @@ func (s *Server) handleResolve(w http.ResponseWriter, r *http.Request) {
 	pol := s.policy.Load()
 	deniedCanonical := make(map[string]bool)
 	for c, parsed := range byCanonical {
-		if !pol.AllowField(e.id, parsed) {
+		if !pol.AllowField(e.id, e.account, parsed) {
 			deniedCanonical[c] = true
 		}
 	}
@@ -235,7 +274,7 @@ func (s *Server) handleResolve(w http.ResponseWriter, r *http.Request) {
 	values := make(map[string]string, len(byCanonical))
 	total := 0
 	for _, c := range e.refs {
-		out, err := s.runner.Read(ctx, byCanonical[c])
+		out, err := s.runner.Read(ctx, account, byCanonical[c])
 		if err != nil {
 			code := runnerCode(err)
 			s.audit(e, "error", code)
@@ -283,19 +322,23 @@ func (s *Server) handleItem(w http.ResponseWriter, r *http.Request) {
 	if !s.begin(ctx, w, r, e, &req) {
 		return
 	}
+	account, ok := s.resolveAccount(w, e, req.Account)
+	if !ok {
+		return
+	}
 	if ref.ValidComponent(req.Vault) != nil || ref.ValidComponent(req.Item) != nil || req.Item == "-" {
 		s.audit(e, "error", api.CodeBadRequest)
 		writeError(w, api.CodeBadRequest, nil)
 		return
 	}
 	e.refs = []string{"op://" + req.Vault + "/" + req.Item}
-	if !s.policy.Load().AllowItem(e.id, req.Vault, req.Item) {
+	if !s.policy.Load().AllowItem(e.id, e.account, req.Vault, req.Item) {
 		s.audit(e, "deny", api.CodeDenied)
 		writeError(w, api.CodeDenied, e.refs)
 		return
 	}
 
-	out, err := s.runner.ItemGet(ctx, req.Vault, req.Item)
+	out, err := s.runner.ItemGet(ctx, account, req.Vault, req.Item)
 	if err != nil {
 		code := runnerCode(err)
 		s.audit(e, "error", code)

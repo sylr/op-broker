@@ -10,6 +10,7 @@ import (
 	"fmt"
 	"io"
 	"log/slog"
+	"maps"
 	"net"
 	"net/http"
 	"os"
@@ -143,7 +144,9 @@ func run(configPath string, verbose bool) error {
 	srv := server.New(server.Config{
 		WhoIs:          tsWhoIs{lc},
 		Policy:         pol,
-		Runner:         opcli.NewExec(cfg.Op.Path, cfg.Op.Account, cfg.Op.Timeout),
+		Runner:         opcli.NewExec(cfg.Op.Path, cfg.Op.Timeout),
+		Accounts:       cfg.Op.Accounts,
+		DefaultAccount: cfg.Op.DefaultAccount,
 		Logger:         logger,
 		Hosts:          hosts,
 		RequestTimeout: cfg.RequestTimeout,
@@ -163,13 +166,13 @@ func run(configPath string, verbose bool) error {
 	}
 
 	// SIGHUP reloads the rules and reopens the log file (for rotation).
-	// Other configuration changes require a restart.
+	// Other configuration changes, accounts included, require a restart.
 	go func() {
 		for range hup {
 			if err := out.Reopen(); err != nil {
 				logger.Error("reopening log", slog.String("error", err.Error()))
 			}
-			_, newPol, err := config.Load(configPath)
+			newPol, err := reloadPolicy(configPath, cfg.Op)
 			if err != nil {
 				logger.Error("reloading config, keeping previous rules", slog.String("error", err.Error()))
 				continue
@@ -181,7 +184,8 @@ func run(configPath string, verbose bool) error {
 
 	errc := make(chan error, 1)
 	go func() { errc <- httpSrv.Serve(ln) }()
-	logger.Info("listening", slog.String("version", version), slog.Any("hosts", hosts), slog.String("addr", cfg.Listen), slog.String("account", cfg.Op.Account))
+	logger.Info("listening", slog.String("version", version), slog.Any("hosts", hosts), slog.String("addr", cfg.Listen),
+		slog.Any("accounts", cfg.Op.Accounts), slog.String("default_account", cfg.Op.DefaultAccount))
 
 	select {
 	case err := <-errc:
@@ -197,6 +201,20 @@ func run(configPath string, verbose bool) error {
 		return err
 	}
 	return nil
+}
+
+// reloadPolicy loads the rules of the configuration at path. They are
+// compiled against the accounts of that file, which must therefore be those
+// running: accounts only change on restart.
+func reloadPolicy(path string, running config.Op) (*policy.Policy, error) {
+	cfg, pol, err := config.Load(path)
+	if err != nil {
+		return nil, err
+	}
+	if !maps.Equal(cfg.Op.Accounts, running.Accounts) || cfg.Op.DefaultAccount != running.DefaultAccount {
+		return nil, errors.New("op accounts changed: restart opbd to apply them")
+	}
+	return pol, nil
 }
 
 // userLogf returns the tsnet UserLogf. Its messages, including the login

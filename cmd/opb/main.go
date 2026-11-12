@@ -34,9 +34,15 @@ Flags override environment variables ($OPB_SERVER, $OPB_BROKER,
 $OPB_ALLOW_NON_TAILNET=1 or 0), which override the context. A context's
 broker and allow_non_tailnet only apply to its own server: once --server or
 OPB_SERVER is set, they are not used. A bundle pinned to a context always uses
-that context: OPB_SERVER, OPB_BROKER and OPB_ALLOW_NON_TAILNET are ignored,
-and --server, --broker, --allow-non-tailnet or another --context are errors.
-Without a context or override, the server is ` + client.DefaultServer + `.
+that context: OPB_SERVER, OPB_BROKER, OPB_ALLOW_NON_TAILNET and OPB_ACCOUNT
+are ignored, and --server, --broker, --allow-non-tailnet or another --context
+are errors. Without a context or override, the server is ` + client.DefaultServer + `.
+
+The account (an alias defined by the server, which reads from its default
+account otherwise) is the one pinned by the bundles in use, then --account,
+then $OPB_ACCOUNT, then the context's account. Like its broker, a context's
+account only applies to its own server. A bundle pinned to an account always
+uses it: another --account is an error. One command reads from one account.
 
 Before sending anything, the client asks the local Tailscale daemon who owns
 the server address and requires it to be the expected broker identity:
@@ -85,6 +91,7 @@ type globals struct {
 	server          string
 	broker          string
 	allowNonTailnet bool
+	account         string
 
 	flags  *pflag.FlagSet // the global flags, to tell which were given
 	getenv func(string) string
@@ -97,6 +104,7 @@ type settings struct {
 	server          string
 	broker          string // "" for the default identity
 	allowNonTailnet bool
+	account         string // "" for the server's default account
 }
 
 func newRootCmd(g *globals) *cobra.Command {
@@ -128,10 +136,12 @@ func newRootCmd(g *globals) *cobra.Command {
 	pf.StringVar(&g.server, "server", "", "opbd server URL")
 	pf.StringVar(&g.broker, "broker", "", "expected tailnet identity of the server: user:<login>, tag:<name> or node:<stable-id> (default: untagged node of this machine's owner)")
 	pf.BoolVar(&g.allowNonTailnet, "allow-non-tailnet", false, "INSECURE, for testing: connect to any address and skip broker verification")
+	pf.StringVar(&g.account, "account", "", "alias of the server-side account to read from (default: the server's default account)")
 	_ = root.MarkPersistentFlagFilename("config", "yaml", "yml")
 	_ = root.RegisterFlagCompletionFunc("context", g.completeContexts)
 	_ = root.RegisterFlagCompletionFunc("server", g.completeServers)
 	_ = root.RegisterFlagCompletionFunc("broker", g.completeBrokers)
+	_ = root.RegisterFlagCompletionFunc("account", g.completeAccounts)
 
 	root.AddGroup(
 		&cobra.Group{ID: "secrets", Title: "Secret commands:"},
@@ -186,35 +196,40 @@ func (g *globals) changed(name string) bool {
 	return g.flags != nil && g.flags.Changed(name)
 }
 
-// settings resolves the connection settings. pin is the context required by
-// the bundles in use, if any.
+// settings resolves the connection settings. pin holds the context and
+// account required by the bundles in use, if any.
 //
-// A context's settings go together: its broker identity and
-// allow_non_tailnet describe its server, so they are dropped when the server
+// A context's settings go together: its broker identity, allow_non_tailnet
+// and account describe its server, so they are dropped when the server
 // comes from elsewhere. Otherwise an insecure test context would disable
 // verification of a server given with --server.
-func (g *globals) settings(pin string) (settings, error) {
+func (g *globals) settings(pin client.Pin) (settings, error) {
 	cfg, err := g.config()
 	if err != nil {
 		return settings{}, err
 	}
-	name, c, err := cfg.SelectContext(g.context, g.getenv("OPB_CONTEXT"), pin)
+	name, c, err := cfg.SelectContext(g.context, g.getenv("OPB_CONTEXT"), pin.Context)
 	if err != nil {
 		return settings{}, err
 	}
-	if pin != "" {
+	if pin.Context != "" {
 		// The bundles' references belong to this broker: leftover
 		// environment overrides must not redirect them.
 		for _, f := range []string{"server", "broker", "allow-non-tailnet"} {
 			if g.changed(f) {
-				return settings{}, fmt.Errorf("--%s cannot be used with bundles pinned to context %q", f, pin)
+				return settings{}, fmt.Errorf("--%s cannot be used with bundles pinned to context %q", f, pin.Context)
 			}
+		}
+		account, err := g.selectAccount(pin, c.Account)
+		if err != nil {
+			return settings{}, err
 		}
 		return settings{
 			context:         name,
 			server:          c.Server,
 			broker:          c.Broker,
 			allowNonTailnet: c.AllowNonTailnet,
+			account:         account,
 		}, nil
 	}
 
@@ -252,16 +267,49 @@ func (g *globals) settings(pin string) (settings, error) {
 	case fromContext:
 		s.allowNonTailnet = c.AllowNonTailnet
 	}
+	var contextAccount string
+	if fromContext {
+		contextAccount = c.Account
+	}
+	if s.account, err = g.selectAccount(pin, contextAccount); err != nil {
+		return settings{}, err
+	}
 	return s, nil
 }
 
-// connect returns a client for the broker selected by the settings.
-func (g *globals) connect(pin string) (*client.Client, error) {
+// selectAccount returns the account alias to use: the one pinned by the
+// bundles in use, then --account, then OPB_ACCOUNT, then contextAccount.
+// Like the other environment overrides, OPB_ACCOUNT is ignored when the
+// bundles pin a context.
+func (g *globals) selectAccount(pin client.Pin, contextAccount string) (string, error) {
+	var account string
+	switch {
+	case pin.Account != "":
+		if g.changed("account") && g.account != pin.Account {
+			return "", fmt.Errorf("the bundles in use require account %q, not --account %q", pin.Account, g.account)
+		}
+		account = pin.Account
+	case g.changed("account"):
+		account = g.account
+	case pin.Context == "" && g.getenv("OPB_ACCOUNT") != "":
+		account = g.getenv("OPB_ACCOUNT")
+	default:
+		account = contextAccount
+	}
+	if account != "" && !api.ValidAccount(account) {
+		return "", fmt.Errorf("invalid account %q", account)
+	}
+	return account, nil
+}
+
+// connect returns a client for the broker and account selected by the
+// settings.
+func (g *globals) connect(pin client.Pin) (*client.Client, error) {
 	s, err := g.settings(pin)
 	if err != nil {
 		return nil, err
 	}
-	opts := client.Options{AllowNonTailnet: s.allowNonTailnet}
+	opts := client.Options{AllowNonTailnet: s.allowNonTailnet, Account: s.account}
 	if !s.allowNonTailnet {
 		if opts.Verify, err = client.TailscaleVerifier(s.broker); err != nil {
 			return nil, err
@@ -278,7 +326,7 @@ func newReadCmd(g *globals) *cobra.Command {
 		Args:              usageArgs(cobra.ExactArgs(1)),
 		ValidArgsFunction: g.completeRefs,
 		RunE: func(cmd *cobra.Command, args []string) error {
-			c, err := g.connect("")
+			c, err := g.connect(client.Pin{})
 			if err != nil {
 				return err
 			}
@@ -334,7 +382,7 @@ func newInjectCmd(g *globals) *cobra.Command {
 			if err != nil {
 				return err
 			}
-			c, err := g.connect("")
+			c, err := g.connect(client.Pin{})
 			if err != nil {
 				return err
 			}
@@ -370,6 +418,9 @@ func newRunCmd(g *globals) *cobra.Command {
 			"environment, and later env files override earlier ones. Bundles from the\n" +
 			"configuration file override env files, and later bundles override earlier\n" +
 			"ones.\n\n" +
+			"With bundles pinned to an account, every reference must come from them: a\n" +
+			"reference from the environment or an env file is an error, since it would be\n" +
+			"read in the bundles' account.\n\n" +
 			"WARNING: unlike op run, the output of <command> is NOT masked: secrets it\n" +
 			"prints will appear in clear.",
 		Args: usageArgs(cobra.MinimumNArgs(1)),
@@ -399,11 +450,21 @@ func newRunCmd(g *globals) *cobra.Command {
 			if err != nil {
 				return err
 			}
+			env := client.MergeEnv(os.Environ(), append(files, bundleVars)...)
+			// The account pinned by the bundles is meant for their own
+			// references: other references, from the environment or env
+			// files, were written for whatever account the command would
+			// otherwise use, and the same vault names exist in every account.
+			if pin.Account != "" {
+				if names := client.ForeignRefs(env, bundleVars); len(names) > 0 {
+					return fmt.Errorf("bundles pinned to account %q only resolve their own references, but these variables from the environment or env files are references too: %s",
+						pin.Account, strings.Join(names, ", "))
+				}
+			}
 			c, err := g.connect(pin)
 			if err != nil {
 				return err
 			}
-			env := client.MergeEnv(os.Environ(), append(files, bundleVars)...)
 			values, err := resolveAll(cmd.Context(), c, client.EnvRefs(env))
 			if err != nil {
 				return err
@@ -496,7 +557,7 @@ func newItemCmd(g *globals) *cobra.Command {
 			if format != "json" {
 				return fmt.Errorf("unsupported format %q (only json is supported)", format)
 			}
-			c, err := g.connect("")
+			c, err := g.connect(client.Pin{})
 			if err != nil {
 				return err
 			}
@@ -549,19 +610,20 @@ func newContextCmd(g *globals) *cobra.Command {
 	}
 	show := &cobra.Command{
 		Use:               "show [name]",
-		Short:             "Show the effective server and broker identity",
+		Short:             "Show the effective server, broker identity and account",
 		Args:              usageArgs(cobra.MaximumNArgs(1)),
 		ValidArgsFunction: g.completeContextArg,
 		RunE: func(_ *cobra.Command, args []string) error {
 			if len(args) == 1 {
 				g.context = args[0]
 			}
-			s, err := g.settings("")
+			s, err := g.settings(client.Pin{})
 			if err != nil {
 				return err
 			}
-			fmt.Printf("context: %s\nserver: %s\nbroker: %s\nallow_non_tailnet: %t\n",
-				cmp.Or(s.context, "(none)"), s.server, cmp.Or(s.broker, "(untagged node of this machine's owner)"), s.allowNonTailnet)
+			fmt.Printf("context: %s\nserver: %s\nbroker: %s\nallow_non_tailnet: %t\naccount: %s\n",
+				cmp.Or(s.context, "(none)"), s.server, cmp.Or(s.broker, "(untagged node of this machine's owner)"), s.allowNonTailnet,
+				cmp.Or(s.account, "(server default)"))
 			return nil
 		},
 	}

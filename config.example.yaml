@@ -2,7 +2,8 @@
 #   ~/Library/Application Support/op-broker/config.yaml   (chmod 600)
 #
 # Send SIGHUP to opbd to reload the rules and reopen the log file. Other
-# settings require a restart.
+# settings, op.accounts included, require a restart: a reload whose accounts
+# differ from the running ones is rejected and the previous rules are kept.
 
 # Tailnet node name of the broker.
 hostname: op-broker
@@ -22,8 +23,21 @@ request_timeout: 120s
 
 op:
   path: /opt/homebrew/bin/op
-  # REQUIRED: account UUID from `op account list`.
-  account: XXXXXXXXXXXXXXXXXXXXXXXXXX
+  # REQUIRED: the 1Password accounts to read from, as alias -> account UUID.
+  # Clients (opb --account) and rules (accounts:) only use the aliases:
+  # lowercase letters, digits, "_" and "-", at most 32 characters. Note that
+  # `op account list` shows your USER ID, not the account's: get the account
+  # UUID ("ID") with `op account get --account <sign-in address>`, e.g.
+  # `op account get --account my.1password.com`.
+  accounts:
+    work: XXXXXXXXXXXXXXXXXXXXXXXXXX
+    personal: YYYYYYYYYYYYYYYYYYYYYYYYYY
+  # Account of requests that name none, and of rules that list none.
+  # Required with more than one account.
+  default_account: work
+  # Older configurations set a single account instead of the two settings
+  # above; it is the account "default", and the default:
+  #   account: XXXXXXXXXXXXXXXXXXXXXXXXXX
   # Time allowed for one op invocation, including waiting for you to approve
   # a Touch ID prompt on the Mac.
   timeout: 60s
@@ -36,6 +50,12 @@ op:
 #   node:<stable-id>  one device, by its stable node ID (see the audit log or
 #                     `tailscale status --json`, field "ID")
 #
+# Accounts (aliases from op.accounts): the accounts a rule applies to. A rule
+# without accounts applies to op.default_account ONLY, never to every
+# account: references have no account part, and every account has, e.g., a
+# "Private" vault, so a grant on op://Private/** must not silently extend to
+# another account's Private vault. List accounts explicitly to grant more.
+#
 # Patterns are case-insensitive. "*" matches one path segment, a final "**"
 # matches the rest.
 #   read:  field reads (opb read / inject / run). A field grant covers every
@@ -45,11 +65,17 @@ op:
 # Vault and item names may be renamed in 1Password; prefer IDs for sensitive
 # grants. Names are compared literally: the personal vault of a business
 # account answers to both "Employee" and "Private" in op, so grant it by ID
-# (see `op vault list`) to cover both spellings.
+# (see `op vault list --account <account UUID>`) to cover both spellings.
 rules:
+  # No accounts: work (the default account) only.
   - principals: ["user:sylvain@formance.com"]
     read: ["op://Dev/**"]
     items: ["op://Dev/postgres"]
+
+  # The Private vault of the personal account, and not the work one's.
+  - principals: ["user:sylvain@formance.com"]
+    accounts: [personal]
+    read: ["op://Private/**"]
 
   - principals: ["tag:ci"]
     read: ["op://CI/deploy-key/private key"]

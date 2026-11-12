@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/sylr/op-broker/internal/api"
+	"github.com/sylr/op-broker/internal/config"
 	"github.com/sylr/op-broker/internal/opcli"
 	"github.com/sylr/op-broker/internal/policy"
 )
@@ -42,7 +43,9 @@ func newExecServer(t *testing.T, requestTimeout time.Duration) (*Server, *bytes.
 	return New(Config{
 		WhoIs:          fakeWhoIs{byAddr: map[string]policy.Identity{"100.64.0.1:1234": laptop}},
 		Policy:         mustPolicy(t, policy.Rule{Principals: []string{"user:sylvain@formance.com"}, Read: []string{"op://Dev/**"}}),
-		Runner:         opcli.NewExec(path, "ACCOUNT123", 10*time.Second),
+		Runner:         opcli.NewExec(path, 10*time.Second),
+		Accounts:       testAccounts,
+		DefaultAccount: "work",
 		Logger:         slog.New(slog.NewJSONHandler(logs, nil)),
 		Hosts:          []string{"op-broker"},
 		RequestTimeout: requestTimeout,
@@ -92,5 +95,64 @@ func TestRejectedHostIsAudited(t *testing.T) {
 	}
 	if !strings.Contains(logs.String(), `"remote":"100.64.0.9:1"`) {
 		t.Fatalf("rejected request not audited:\n%s", logs)
+	}
+}
+
+// TestAccountsEndToEnd goes from the configuration file to the op command
+// line: the fake op prints the --account argument it was given.
+func TestAccountsEndToEnd(t *testing.T) {
+	cfg, pol, err := config.Parse([]byte(`
+op:
+  accounts:
+    work: ` + workUUID + `
+    personal: ` + personalUUID + `
+  default_account: work
+rules:
+  - principals: ["user:sylvain@formance.com"]
+    read: ["op://Dev/**"]
+  - principals: ["user:sylvain@formance.com"]
+    accounts: [work]
+    read: ["op://Ops/**"]
+`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	path := filepath.Join(t.TempDir(), "op")
+	if err := os.WriteFile(path, []byte("#!/bin/sh\nprintf '%s' \"$2\"\n"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	logs := &bytes.Buffer{}
+	srv := New(Config{
+		WhoIs:          fakeWhoIs{byAddr: map[string]policy.Identity{"100.64.0.1:1234": laptop}},
+		Policy:         pol,
+		Runner:         opcli.NewExec(path, 10*time.Second),
+		Accounts:       cfg.Op.Accounts,
+		DefaultAccount: cfg.Op.DefaultAccount,
+		Logger:         slog.New(slog.NewJSONHandler(logs, nil)),
+		Hosts:          []string{"op-broker"},
+		RequestTimeout: 5 * time.Second,
+	})
+	h := &harness{srv: srv, logs: logs}
+
+	// The rule without accounts and the rule naming the default account
+	// both apply to the default account, whether named or implied.
+	for _, account := range []string{"", "work"} {
+		rec := h.do(t, "POST", "/v1/resolve", resolveBodyIn(account, "op://Dev/a/b", "op://Ops/c/d"))
+		values := decodeValues(t, rec)
+		for _, r := range []string{"op://Dev/a/b", "op://Ops/c/d"} {
+			if values[r] != "--account="+workUUID {
+				t.Errorf("account %q: %s resolved with %q", account, r, values[r])
+			}
+		}
+	}
+	// Neither applies to the other account.
+	for _, r := range []string{"op://Dev/a/b", "op://Ops/c/d"} {
+		rec := h.do(t, "POST", "/v1/resolve", resolveBodyIn("personal", r))
+		if rec.Code != http.StatusForbidden || decodeError(t, rec).Code != api.CodeDenied {
+			t.Errorf("personal %s: status = %d, body = %s", r, rec.Code, rec.Body)
+		}
+	}
+	if !strings.Contains(logs.String(), `"account":"work"`) || !strings.Contains(logs.String(), `"account":"personal"`) {
+		t.Errorf("accounts missing from audit log:\n%s", logs)
 	}
 }
